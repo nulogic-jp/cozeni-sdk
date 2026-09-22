@@ -1,0 +1,34 @@
+#!/bin/sh
+# コミット前にformat・lint・typecheck・testを検証する。
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+fail() {
+  echo "pre-commit: $1" >&2
+  exit 1
+}
+
+command -v bun >/dev/null 2>&1 ||
+  fail "bunが見つかりません。https://bun.sh を導入してPATHへ追加してください。"
+[ -d node_modules ] ||
+  fail "依存が未導入です。bun install --frozen-lockfile を実行してください。"
+
+echo "pre-commit: format"
+bun run format:check ||
+  fail "整形差分があります。bun run format で修正してください。"
+
+echo "pre-commit: lint"
+bun run lint ||
+  fail "lint違反があります。bun run format で自動修正できる場合があります。"
+
+echo "pre-commit: typecheck"
+bun run typecheck || fail "型エラーがあります。"
+
+echo "pre-commit: build"
+bun run build || fail "ビルドが失敗しました。"
+
+echo "pre-commit: test"
+bun run test || fail "テストが失敗しました。"
+
+echo "pre-commit: OK"

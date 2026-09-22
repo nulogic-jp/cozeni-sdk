@@ -1,0 +1,1307 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "1.0.0",
+    "title": "Cozeni 外部API",
+    "description": "商品設定用APIキーと購入者認証を分離した公開契約。"
+  },
+  "servers": [
+    {
+      "url": "/external/v1",
+      "description": "利用環境のAPIオリジンを使用する。"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "CustomerCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "cozeni_customer",
+        "description": "購入者JWT。セットアップ用APIキーは使用しない。サイトのサーバーから購入者Cookieだけを転送する。"
+      },
+      "CreatorApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "管理画面から発行したクリエイターAPIキー。購入者認証には使わない。"
+      }
+    },
+    "schemas": {
+      "ExternalHandoffToken": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": ["token"]
+      },
+      "ExternalError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "request_id"]
+          }
+        },
+        "required": ["error"]
+      },
+      "ExternalHandoffInput": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": ["code"],
+        "additionalProperties": false
+      },
+      "ExternalEntitlement": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "entitled": {
+                "type": "boolean",
+                "enum": [true]
+              }
+            },
+            "required": ["entitled"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "entitled": {
+                "type": "boolean",
+                "enum": [false]
+              },
+              "reason": {
+                "type": "string",
+                "enum": ["no_grant", "revoked"]
+              }
+            },
+            "required": ["entitled", "reason"]
+          }
+        ]
+      },
+      "ExternalNoSession": {
+        "type": "object",
+        "properties": {
+          "entitled": {
+            "type": "boolean",
+            "enum": [false]
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["no_session"]
+          }
+        },
+        "required": ["entitled", "reason"]
+      },
+      "ExternalUnavailable": {
+        "type": "object",
+        "properties": {
+          "entitled": {
+            "type": "boolean",
+            "enum": [false]
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["unavailable"]
+          }
+        },
+        "required": ["entitled", "reason"]
+      },
+      "ExternalEntitlementInput": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["product_id"],
+        "additionalProperties": false
+      },
+      "ExternalAccount": {
+        "type": "object",
+        "properties": {
+          "creator_id": {
+            "type": "string"
+          },
+          "api_key_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "products:read",
+                "products:write",
+                "checkout_links:read",
+                "checkout_links:write"
+              ]
+            }
+          },
+          "environment": {
+            "type": "string"
+          },
+          "api_version": {
+            "type": "string",
+            "enum": ["v1"]
+          }
+        },
+        "required": [
+          "creator_id",
+          "api_key_id",
+          "scopes",
+          "environment",
+          "api_version"
+        ],
+        "additionalProperties": false
+      },
+      "ExternalProductList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExternalProduct"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": ["items", "next_cursor"]
+      },
+      "ExternalProduct": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_jpy": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "enum": ["jpy"]
+          },
+          "access_url": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "archived"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "price_jpy",
+          "currency",
+          "access_url",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "ExternalCreateProduct": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "price_jpy": {
+            "type": "integer",
+            "minimum": 50,
+            "maximum": 9999999
+          },
+          "access_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": ["name", "price_jpy", "access_url"],
+        "additionalProperties": false
+      },
+      "ExternalUpdateProduct": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "price_jpy": {
+            "type": "integer",
+            "minimum": 50,
+            "maximum": 9999999
+          },
+          "access_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExternalCheckoutLink": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "product_id", "url", "disabled"],
+        "additionalProperties": false
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/customer/handoff/exchange": {
+      "post": {
+        "operationId": "externalExchangeHandoff",
+        "tags": ["購入者"],
+        "security": [],
+        "summary": "60秒・単回コードを購入者JWTへ交換する",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalHandoffInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "購入者JWT。自サイトのHttpOnly Cookieへ保存する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalHandoffToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input / invalid_code。不正・期限切れ・消費済みを区別しない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。交換の成否が不明なら新しいOTP入場から再開する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customer/entitlements/check": {
+      "post": {
+        "operationId": "externalCheckEntitlements",
+        "tags": ["購入者"],
+        "security": [
+          {
+            "CustomerCookie": []
+          }
+        ],
+        "summary": "購入者の商品アクセス権を判定する",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalEntitlementInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "許可、未購入または剥奪済み。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEntitlement"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。SDKは拒否として扱う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "セッションがない・無効・期限切れ・epoch不一致。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalNoSession"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "権利を確認できないため拒否。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalUnavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account": {
+      "get": {
+        "operationId": "externalGetAccount",
+        "tags": ["管理"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "認証したキーの所有者・権限・環境。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalAccount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "operationId": "externalListProducts",
+        "tags": ["商品"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: products:read。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "作成日時・IDの降順。next_cursorは次の要求へそのまま渡す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalProductList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "externalCreateProduct",
+        "tags": ["商品"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: products:write。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "同じ作成要求の再送では保存した同じキーを使う。"
+            },
+            "required": true,
+            "description": "同じ作成要求の再送では保存した同じキーを使う。",
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalCreateProduct"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "公開商品情報。リンクは別APIで取得する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalProduct"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products/{product_id}": {
+      "get": {
+        "operationId": "externalGetProduct",
+        "tags": ["商品"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: products:read。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "公開商品情報。リンクは別APIで取得する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalProduct"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "externalUpdateProduct",
+        "tags": ["商品"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: products:write。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalUpdateProduct"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "公開商品情報。リンクは別APIで取得する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalProduct"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products/{product_id}/checkout-link": {
+      "get": {
+        "operationId": "externalGetCheckoutLink",
+        "tags": ["リンク"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: checkout_links:read。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "標準チェックアウトリンク。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCheckoutLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "externalEnsureCheckoutLink",
+        "tags": ["リンク"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: checkout_links:write。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "標準チェックアウトリンク。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCheckoutLink"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "未発行だった標準リンクを作成した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCheckoutLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

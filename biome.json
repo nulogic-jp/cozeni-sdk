@@ -1,0 +1,32 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
+  "files": {
+    "includes": [
+      "src/**",
+      "tests/**",
+      "examples/nextjs/**",
+      "!**/.next/**",
+      "!**/node_modules/**",
+      "!**/next-env.d.ts",
+      "skills/**",
+      "scripts/**",
+      "vitest.config.ts"
+    ]
+  },
+  "formatter": {
+    "indentStyle": "space"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
+}

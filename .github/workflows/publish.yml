@@ -1,0 +1,120 @@
+name: Publish
+
+# package.jsonのversionをそのまま公開する。誤発火で版を焼き付けないよう手動実行に限る。
+#
+# 初回の 0.1.0 だけはこのワークフローでは公開できない。npmのtrusted publisherは
+# 対象packageがregistryに存在することが前提のため、最初の1版はmaintainerが
+# ローカルから `npm publish --access public` で公開し、その後に
+# `npm trust github <package> --repo <owner/repo> --file publish.yml --allow-publish`
+# を登録する。2版目以降がこのワークフローの担当。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # npmのtrusted publishing（OIDC）に使う。長期トークンは保存しない。
+  id-token: write
+
+# 公開処理を直列化し、先に開始したrunを公開途中で中断しない。
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    # 手動実行では任意のbranchを選べる。未マージのコードを公開しない。
+    if: github.ref == 'refs/heads/main'
+    steps:
+      # Actionは移動しうるタグではなく完全長SHAで固定する。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.8
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # trusted publishingはnpm 11.5.1以降が必要。実行時に内容が変わらないよう版を固定する。
+      - name: npmを固定版へ更新
+        run: npm install -g npm@12.0.2
+
+      - name: 依存を導入
+        run: bun install --frozen-lockfile
+
+      # 既存CIとは別に、公開されるcommit自身へ完全な品質ゲートを設ける。
+      # Next.js導入例の検証もここに含まれる。
+      - name: 公開前検査
+        run: bun run check
+
+      - name: 公開するversionを決める
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+
+          # 同じversionの再公開はnpm側で拒否される。到達前に止めて原因を明示する。
+          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+            echo "${package_name}@${package_version} は公開済みです。versionを上げてください。" >&2
+            exit 1
+          fi
+
+          printf 'name=%s\n' "$package_name" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$package_version" >> "$GITHUB_OUTPUT"
+
+      - name: 公開
+        run: npm publish --access public
+
+      # 認証情報を渡さずに取得できることまで確かめる。
+      - name: 公開済みpackageをクリーン環境で検証
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          consumer_directory="$(mktemp -d "$RUNNER_TEMP/cozeni-sdk-consumer.XXXXXX")"
+          trap 'rm -rf -- "$consumer_directory"' EXIT
+          printf '{"private":true,"type":"module"}\n' > "$consumer_directory/package.json"
+
+          # publish成功後もregistryへ反映されるまで数十秒かかることがある。
+          for attempt in 1 2 3 4 5 6; do
+            if npm install \
+              --prefix "$consumer_directory" \
+              --save-exact \
+              --ignore-scripts \
+              --no-audit \
+              --no-fund \
+              --registry https://registry.npmjs.org \
+              "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+            then
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "公開済みpackageを取得できませんでした。" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
+
+          cd "$consumer_directory"
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { readFile } from "node:fs/promises";
+
+            const specifier = process.env.PACKAGE_NAME;
+            const metadata = JSON.parse(
+              await readFile(`node_modules/${specifier}/package.json`, "utf8"),
+            );
+            assert.equal(metadata.version, process.env.PACKAGE_VERSION);
+            await import(specifier);
+          '
+          test -f "node_modules/${PACKAGE_NAME}/skills/cozeni-setup/SKILL.md"

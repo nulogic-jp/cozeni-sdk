@@ -1,0 +1,29 @@
+{
+  "name": "cozeni-nextjs-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 3100",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1 -p 3100",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint app lib next.config.ts tests",
+    "test": "vitest run tests"
+  },
+  "dependencies": {
+    "@nulogic/cozeni-sdk": "^0.1.0",
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.2",
+    "vitest": "5.0.0",
+    "@biomejs/biome": "2.5.12"
+  }
+}

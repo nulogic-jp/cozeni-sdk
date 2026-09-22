@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tgz
+artifacts/
+.next/
+.env*
+!.env.example
+.cozeni/
+*.tsbuildinfo

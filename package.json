@@ -1,0 +1,63 @@
+{
+  "name": "@nulogic/cozeni-sdk",
+  "version": "0.1.0",
+  "description": "Cozeni外部API用のサーバー向けJavaScript SDK",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nulogic-jp/cozeni-sdk.git"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills/cozeni-setup/SKILL.md",
+    "skills/cozeni-setup/references",
+    "skills/cozeni-setup/scripts/configure-next.mjs",
+    "skills/cozeni-setup/scripts/setup.mjs",
+    "README.md",
+    "examples/nextjs/app",
+    "examples/nextjs/lib",
+    "examples/nextjs/next.config.ts",
+    "examples/nextjs/tsconfig.json",
+    "examples/nextjs/package.json",
+    "examples/nextjs/.env.example",
+    "examples/javascript-server/README.md",
+    "examples/javascript-server/web-handler.mjs",
+    "examples/javascript-server/node-server.mjs"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && node --test skills/cozeni-setup/scripts/setup.test.mjs examples/javascript-server/web-handler.test.mjs",
+    "lint": "biome check src tests examples/nextjs examples/javascript-server skills/cozeni-setup/scripts scripts vitest.config.ts",
+    "format": "biome check --write src tests examples/nextjs examples/javascript-server skills scripts vitest.config.ts",
+    "format:check": "biome format src tests examples/nextjs examples/javascript-server skills scripts vitest.config.ts",
+    "check": "bun run lint && bun run typecheck && bun run build && bun run test && bun run test:package && bun run test:repository && bun run test:example",
+    "prepack": "bun run build",
+    "test:package": "node scripts/verify-package.mjs",
+    "test:next-runtime": "node scripts/verify-next-runtime.mjs",
+    "setup:hooks": "git config core.hooksPath .githooks",
+    "test:repository": "node scripts/verify-repository.mjs",
+    "test:example": "node scripts/verify-example.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@types/node": "^24.3.1",
+    "typescript": "^5.9.2",
+    "vitest": "5.0.0"
+  }
+}
