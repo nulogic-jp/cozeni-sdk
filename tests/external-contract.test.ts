@@ -18,6 +18,13 @@ import { fixture } from "./fixtures/external-api-v1.literal.js";
 const account = {
   ...fixture.account,
   scopes: [...fixture.account.scopes],
+  sales: {
+    ...fixture.account.sales,
+    blockers: fixture.account.sales.blockers.map((blocker) => ({
+      ...blocker,
+    })),
+    warnings: [...fixture.account.sales.warnings],
+  },
 } satisfies Account;
 const product = fixture.product satisfies Product;
 const input = fixture.create_product satisfies CreateProduct;

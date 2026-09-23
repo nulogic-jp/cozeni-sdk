@@ -167,11 +167,55 @@ test("ページングで全候補を取得し、不正な循環cursorで止ま�
     cursor
       ? { items: [{ ...product, id: "prd_older" }], next_cursor: null }
       : { items: [product], next_cursor: "opaque" };
-  assert.equal((await inspectProducts({ config, client })).length, 2);
+  const result = await inspectProducts({ config, client });
+  assert.equal(result.products.length, 2);
   client.products.list = async () => ({ items: [], next_cursor: "repeated" });
   await assert.rejects(inspectProducts({ config, client }), {
     code: "invalid_pagination",
   });
+});
+
+test("旧APIでsalesが無い場合はnullを明示する", async () => {
+  const { client } = fixture();
+  // account.get()はfixtureの時点でsalesを持たない（旧APIを模す）。
+  const result = await inspectProducts({ config, client });
+  assert.equal(result.sales, null);
+});
+
+test("salesがある場合はcan_sell・blockers・warningsをそのまま伝える", async () => {
+  const { client, account } = fixture();
+  account.sales = {
+    can_sell: false,
+    blockers: [
+      {
+        code: "review_rejected",
+        action_url: "https://app.cozeni.net/settings/onboarding",
+        rejection: {
+          reason_code: "tokushoho_missing_contact",
+          note: "特定商取引法の連絡先を確認できませんでした",
+        },
+      },
+      {
+        code: "stripe_onboarding_incomplete",
+        action_url: "https://app.cozeni.net/settings/onboarding",
+      },
+    ],
+    warnings: [],
+  };
+  const result = await inspectProducts({ config, client });
+  assert.deepEqual(result.sales, account.sales);
+  assert.equal(result.sales.can_sell, false);
+});
+
+test("salesがcan_sell trueでもwarningsは独立して伝える", async () => {
+  const { client, account } = fixture();
+  account.sales = {
+    can_sell: true,
+    blockers: [],
+    warnings: ["payouts_disabled"],
+  };
+  const result = await inspectProducts({ config, client });
+  assert.deepEqual(result.sales.warnings, ["payouts_disabled"]);
 });
 test("同時実行のロックと破損状態を検出してPOSTしない", async (t) => {
   const statePath = await directory(t);

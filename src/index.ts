@@ -3,12 +3,46 @@ export type Scope =
   | "products:write"
   | "checkout_links:read"
   | "checkout_links:write";
+export type SalesRejectionReasonCode =
+  | "tokushoho_missing_contact"
+  | "tokushoho_unreachable"
+  | "website_unreachable"
+  | "description_insufficient"
+  | "prohibited_content"
+  | "other";
+export type SalesWarning = "payouts_disabled";
+// review_rejectedだけがrejection詳細を持つ判別union。codeで種別を絞り込める。
+export type SalesBlocker =
+  | {
+      code:
+        | "review_not_submitted"
+        | "review_pending"
+        | "stripe_not_connected"
+        | "stripe_onboarding_incomplete"
+        | "stripe_verification_pending";
+      action_url: string;
+    }
+  | {
+      code: "review_rejected";
+      action_url: string;
+      rejection: {
+        reason_code: SalesRejectionReasonCode;
+        note: string | null;
+      };
+    };
+export interface AccountSales {
+  can_sell: boolean;
+  blockers: SalesBlocker[];
+  warnings: SalesWarning[];
+}
 export interface Account {
   creator_id: string;
   api_key_id: string;
   scopes: Scope[];
   environment: string;
   api_version: "v1";
+  // 旧バージョンのAPIはsalesを返さないため任意項目にする。
+  sales?: AccountSales;
 }
 export interface CreateProduct {
   name: string;
