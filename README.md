@@ -78,7 +78,7 @@ if (!result.entitled) {
 
 `cozeni_customer` Cookieだけを読み、既存の認証CookieはCozeniへ転送しません。未認証・無効応答・通信障害・タイムアウトのいずれでも許可せず、`unavailable`（Cozeni側の障害）を購入要求へ変換しないでください。**`unavailable`には`enterUrl`が付きません**（障害を再認証要求に変換しないため）。
 
-`enterUrl`はAPI応答をそのまま信頼するのではなく、SDKが構造で検証してから採用します（httpsが必須、httpはlocalhost・127.0.0.1・[::1]のloopbackだけ許可、userinfo無し、pathnameは`/enter`固定、クエリは問い合わせた`productId`と一致する`product_id`の1個だけ、fragment無し）。SDKの設定にweb originを足さない方針のため、許可originの列挙ではなく構造で縛っています。APIオリジン自体はTLS（HTTPS）で取得した応答を信頼する前提です（[SECURITY.md](SECURITY.md)参照）。合わない値は省略されます（リダイレクトしません）。
+`enterUrl`はAPI応答をそのまま信頼するのではなく、SDKが構造で検証してから採用します（httpsが必須、httpはlocalhost・127.0.0.1・[::1]のloopbackだけ許可、userinfo無し、pathnameは`/enter`固定、クエリは問い合わせた`productId`と一致する`product_id`の1個だけ、fragment無し）。SDKの設定にweb originを足さない方針のため、許可originの列挙ではなく構造で縛っています。APIオリジン自体は、TLS（HTTPS）で取得した応答を信頼する前提です。合わない値は省略されます（リダイレクトしません）。
 
 拒否結果からリダイレクト先を組み立てるフレームワーク非依存のヘルパーもあります。第2引数には、この結果を問い合わせた`productId`を渡してください（`enterUrl`が実際にその商品を指しているかを再検証するため）。
 
@@ -145,4 +145,4 @@ bun run check
 
 開発用フックは `bun run setup:hooks` で `core.hooksPath` を `.githooks` に設定します。以後コミット前に `format:check` / `lint` / `typecheck` / `test` が走ります。整形とlintの自動修正は `bun run format`、迂回は `git commit --no-verify` です。[CI](.github/workflows/ci.yml) はmainへのpushとpull requestでSDKと導入例のビルドを検証します。
 
-`bun run test:next-runtime` は `check` に含みます。HEADをnpm packしたtarball（`scripts/example-consumer.mjs`）で一時consumerを作り、そこで`bun install` / `next build` / `next start`まで自己完結で行うため、事前の手動セットアップは不要です。ローカルのCozeni API互換モックを起動し、実際に起動した本番相当サーバーへHTTPで到達して、外部enter_urlへのリダイレクト、ハンドオフ成功直後の停止条件と正規化、Route Handlerが実際にリダイレクトしないことを確認します（所要時間は概ね20秒未満）。Server Actionの非リダイレクト・plain object返却はNext.jsのAction ID解決が実HTTPでは複雑なため、vitestのユニットテスト（`examples/nextjs/tests/security.test.ts`）側で検証します。
+`bun run test:next-runtime` は `check` に含みます（`check` では直前に `build` が走ります）。現在の `dist` をnpm packしたtarball（`scripts/example-consumer.mjs`）で一時consumerを作り、そこで`bun install` / `next build` / `next start`まで行います。単独で実行するときは、先に `bun run build` を実行してください（packは `--ignore-scripts` のため、古い `dist` のまま検証してしまいます）。ローカルのCozeni API互換モックを起動し、実際に起動した本番相当サーバーへHTTPで到達して、外部enter_urlへのリダイレクト、ハンドオフ成功直後の停止条件と正規化、Route Handlerが実際にリダイレクトしないことを確認します（所要時間は概ね20秒未満）。Server Actionの非リダイレクト・plain object返却はNext.jsのAction ID解決が実HTTPでは複雑なため、vitestのユニットテスト（`examples/nextjs/tests/security.test.ts`）側で検証します。
