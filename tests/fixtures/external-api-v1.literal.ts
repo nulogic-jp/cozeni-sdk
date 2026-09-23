@@ -36,7 +36,7 @@ export const fixture = {
     access_url: "https://creator.example/members",
   },
   product: {
-    id: "prd_example",
+    id: "prd_0123456789abcdef0123456789abcdef",
     name: "配色ハンドブック",
     price_jpy: 3000,
     currency: "jpy",
@@ -47,7 +47,7 @@ export const fixture = {
   },
   checkout_link: {
     id: "lnk_example",
-    product_id: "prd_example",
+    product_id: "prd_0123456789abcdef0123456789abcdef",
     url: "https://checkout.example/checkout/example",
     disabled: false,
   },
@@ -121,6 +121,6 @@ export const fixture = {
     token: "fixture-only-not-a-valid-jwt",
   },
   entitlement_input: {
-    product_id: "prd_example",
+    product_id: "prd_0123456789abcdef0123456789abcdef",
   },
 } as const;

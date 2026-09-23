@@ -353,14 +353,10 @@ describe("正式外部v1契約とSDK", () => {
     "購入者HTTP $status / $body は正本と同じ許可・拒否を返す",
     async ({ status, body }) => {
       const fetch = contractFetch("externalCheckEntitlements", status, body);
-      // 公開APIはcamelCase。正本fixtureのenter_urlはproduct.id（"prd_example"）とは
-      // 異なる商品IDの例（"prd_0123456789abcdef..."）で書かれているため、SDKの
-      // product_id一致検証によりこのproductIdでの問い合わせでは採用されない。
-      // 一致・不一致の採用可否そのものは専用テストで検証する。
-      const { enter_url: _enterUrl, ...expected } = body as Record<
-        string,
-        unknown
-      >;
+      // 公開APIはcamelCase。正本fixtureのenter_urlはproduct.idと一致する商品IDで
+      // 書かれているため、product_id一致検証を経てenterUrlとして採用される。
+      const { enter_url, ...rest } = body as Record<string, unknown>;
+      const expected = enter_url ? { ...rest, enterUrl: enter_url } : rest;
       expect(
         await createCustomerClient({ apiOrigin, fetch }).checkEntitlement({
           productId: product.id,
@@ -389,9 +385,12 @@ describe("正式外部v1契約とSDK", () => {
     }).checkEntitlement({
       productId: product.id,
     });
-    // 正本fixtureのenter_urlはproduct.idと異なる商品IDの例のため採用されない
-    // （上のテストと同じ理由）。ここではCookie無し呼び出し自体を検証する。
-    expect(result).toEqual({ entitled: false, reason: "no_session" });
+    // 正本fixtureのenter_urlはproduct.idと一致するため採用される。
+    expect(result).toEqual({
+      entitled: false,
+      reason: "no_session",
+      enterUrl: (found.body as { enter_url: string }).enter_url,
+    });
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("Cookie")).toBe(
       false,
     );
