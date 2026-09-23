@@ -2,6 +2,7 @@ import {
   CozeniError,
   createCustomerClient,
   customerCookie,
+  enterRedirectResponse,
   trustedSiteUrl,
 } from "@nulogic/cozeni-sdk";
 
@@ -37,10 +38,16 @@ function denialStatus(reason) {
   return 403;
 }
 
-function deniedResponse(reason, asJson = false) {
+function deniedResponse(entitlement, asJson = false) {
+  const { reason } = entitlement;
   const status = denialStatus(reason);
   if (asJson) {
-    return Response.json({ error: reason }, { status, headers: privateHeaders });
+    // Route相当のJSON応答はリダイレクトせず、enter_urlを本文へ含めるだけにする。
+    const body =
+      reason !== "unavailable" && entitlement.enterUrl
+        ? { error: reason, enter_url: entitlement.enterUrl }
+        : { error: reason };
+    return Response.json(body, { status, headers: privateHeaders });
   }
   const message =
     reason === "unavailable"
@@ -131,8 +138,27 @@ export function createWebHandler(config, dependencies = {}) {
       });
     }
 
+    // ハンドオフのコード交換直後（cozeni_handoff付き＝成功直後、または
+    // cozeni_error付き＝交換失敗）は、enter_urlがあっても再リダイレクトせず、
+    // 拒否画面に留める（無限リダイレクトの回避）。
+    const haltRedirect =
+      requestUrl.searchParams.has("cozeni_error") ||
+      requestUrl.searchParams.has("cozeni_handoff");
     const result = await entitlement(request);
-    if (!result.entitled) return deniedResponse(result.reason);
+    if (!result.entitled) {
+      const redirectResponse = haltRedirect
+        ? undefined
+        : enterRedirectResponse(result, productId);
+      return redirectResponse ?? deniedResponse(result);
+    }
+    // ここに到達したら権利がある。ハンドオフ成功直後の印が付いていれば、
+    // 印を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
+    if (requestUrl.searchParams.has("cozeni_handoff")) {
+      return new Response(null, {
+        status: 303,
+        headers: { ...privateHeaders, Location: membersUrl.href },
+      });
+    }
     return new Response(
       `<!doctype html><html lang="ja"><meta charset="utf-8"><title>購入者限定</title><main><h1>購入者限定ページ</h1><p>${escapeHtml(protectedContent)}</p></main>`,
       {
@@ -146,7 +172,8 @@ export function createWebHandler(config, dependencies = {}) {
 
   async function protectedApi(request) {
     const result = await entitlement(request);
-    if (!result.entitled) return deniedResponse(result.reason, true);
+    // JSON APIはリダイレクトせず、enter_urlを本文へ含めるだけにする。
+    if (!result.entitled) return deniedResponse(result, true);
     return Response.json(
       { content: protectedContent },
       { headers: privateHeaders },
@@ -162,7 +189,11 @@ export function createWebHandler(config, dependencies = {}) {
       }
       const { token } = await customer.exchangeHandoff(codes[0]);
       headers.set("Set-Cookie", customerCookie(token, membersUrl.origin));
-      headers.set("Location", membersUrl.href);
+      const target = new URL(membersUrl);
+      // ハンドオフ成功直後を示す秘密を含まない印。members()はこれか
+      // cozeni_errorがあれば再リダイレクトを止める（無限リダイレクトの回避）。
+      target.searchParams.set("cozeni_handoff", "1");
+      headers.set("Location", target.href);
     } catch (error) {
       const invalid = error instanceof CozeniError && error.code === "invalid_code";
       if (!invalid) reportError("購入者コード交換");

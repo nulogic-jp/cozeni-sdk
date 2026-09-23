@@ -10,6 +10,17 @@ vi.mock("next/headers", () => ({
     get: () => (state.token ? { value: state.token } : undefined),
   }),
 }));
+// next/navigationのredirect()は本来Next.jsの制御フロー例外を投げる。テストでは
+// 呼び出し先URLを記録しつつ、同じく例外を投げて呼び出し元のcatchの挙動を検証する。
+const redirectMock = vi.hoisted(() =>
+  vi.fn((url: string) => {
+    const error = new Error("NEXT_REDIRECT");
+    (error as Error & { digest: string }).digest =
+      `NEXT_REDIRECT;push;${url};307;`;
+    throw error;
+  }),
+);
+vi.mock("next/navigation", () => ({ redirect: redirectMock }));
 
 import { GET as dataRoute } from "../app/api/protected/route";
 import { POST as clearRoute } from "../app/cozeni/clear/route";
@@ -22,10 +33,10 @@ import nextConfig from "../next.config";
 const secret = "購入者限定の秘密本文";
 beforeEach(() => {
   state.token = "valid.token.jwt";
+  redirectMock.mockClear();
   vi.stubEnv("COZENI_API_ORIGIN", "http://localhost:8787");
   vi.stubEnv("COZENI_SITE_ORIGIN", "https://creator.example");
   vi.stubEnv("COZENI_PRODUCT_ID", "prd_test");
-  vi.stubEnv("COZENI_OTP_URL", "https://cozeni.example/reentry");
   vi.stubEnv("COZENI_PROTECTED_CONTENT", secret);
 });
 afterEach(() => {
@@ -76,15 +87,19 @@ describe("Next.jsの各入口で認可", () => {
       reason: "unavailable",
     });
   });
-  it("CookieなしではAPIを呼ばず拒否する", async () => {
+  it("Cookieなしでも権利確認APIを呼び、Cookieヘッダーを送らない", async () => {
     state.token = undefined;
-    const fetch = vi.fn();
-    vi.stubGlobal("fetch", fetch);
+    api({ entitled: false, reason: "no_session" }, 401);
     expect(await protectedAction()).toEqual({
       ok: false,
       reason: "no_session",
     });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(
+      new Headers(
+        (fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.headers,
+      ).has("Cookie"),
+    ).toBe(false);
   });
 });
 describe("Next.jsのハンドオフとCookie消去", () => {
@@ -94,8 +109,10 @@ describe("Next.jsのハンドオフとCookie消去", () => {
       new Request("https://evil.example/cozeni/handoff?cozeni_code=code"),
     );
     expect(response.status).toBe(303);
+    // ハンドオフ成功直後を示す秘密を含まない印(cozeni_handoff)が付く。
+    // 無限リダイレクトの停止条件としてpage側が使う。
     expect(response.headers.get("location")).toBe(
-      "https://creator.example/members",
+      "https://creator.example/members?cozeni_handoff=1",
     );
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("Secure");
@@ -177,19 +194,6 @@ describe("レビュー指摘の回帰", () => {
       await Members({ searchParams: Promise.resolve(query) }),
     );
   }
-  it("再入場URLが未設定でも安全な案内を表示してリンクを隠す", async () => {
-    state.token = undefined;
-    vi.stubEnv("COZENI_OTP_URL", "");
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const html = await page();
-    expect(html).toContain("再入場の設定を確認中です");
-    expect(html).not.toContain("メール認証で再入場</a>");
-    expect(html).not.toContain(secret);
-    expect(log).toHaveBeenCalledWith("[cozeni] サーバー設定エラー", {
-      operation: "再入場リンク",
-      setting: "COZENI_OTP_URL",
-    });
-  });
   it.each(["invalid_code", "unavailable"])(
     "%s交換失敗後も既存セッションを再認可する",
     async (reason) => {
@@ -329,5 +333,109 @@ describe("設定診断と失敗後の認可の追加境界", () => {
     expect(html).not.toContain("secret-code");
     expect(JSON.stringify(log.mock.calls)).toContain("COZENI_SITE_ORIGIN");
     expect(JSON.stringify(log.mock.calls)).not.toContain("secret-code");
+  });
+});
+
+describe("enter_urlへの自動リダイレクト", () => {
+  const enterUrl = "https://checkout.example/enter?product_id=prd_test";
+  async function page(query: Record<string, string> = {}) {
+    return renderToStaticMarkup(
+      await Members({ searchParams: Promise.resolve(query) }),
+    );
+  }
+  it("enter_urlがある拒否はpageの入口でenter_urlへredirectする", async () => {
+    api({ entitled: false, reason: "no_grant", enter_url: enterUrl }, 200);
+    await expect(page()).rejects.toThrow();
+    expect(redirectMock).toHaveBeenCalledWith(enterUrl);
+  });
+  it("unavailableはenter_urlがあってもredirectしない", async () => {
+    // unavailableの契約にenter_urlは付かないため、通常はこの組み合わせは
+    // 発生しない。仮に付いていてもredirectしないことを確認する。
+    api({ entitled: false, reason: "unavailable", enter_url: enterUrl }, 503);
+    const html = await page();
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(html).toContain("時間をおいて再試行してください");
+    expect(html).not.toContain(secret);
+  });
+  it("enter_urlが無い拒否はredirectせずサイト内の拒否表示に留める", async () => {
+    api({ entitled: false, reason: "no_grant" }, 200);
+    const html = await page();
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(html).toContain("この商品の購入権限がありません");
+    expect(html).not.toContain(secret);
+  });
+  it("ハンドオフのコード交換直後（cozeni_error付き）はenter_urlがあってもredirectしない", async () => {
+    api({ entitled: false, reason: "no_session", enter_url: enterUrl }, 401);
+    const html = await page({ cozeni_error: "invalid_code" });
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(html).toContain("購入時のメールアドレスで再入場してください");
+    expect(html).not.toContain(secret);
+  });
+  it("Route Handlerはenter_urlがあってもredirectせずJSON本文へ含める", async () => {
+    api({ entitled: false, reason: "no_grant", enter_url: enterUrl }, 200);
+    const response = await dataRoute();
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: "no_grant",
+      enter_url: enterUrl,
+    });
+  });
+  it("Server Actionはenter_urlがあってもredirectせず理由だけを返す", async () => {
+    api({ entitled: false, reason: "no_grant", enter_url: enterUrl }, 200);
+    expect(await protectedAction()).toEqual({ ok: false, reason: "no_grant" });
+    expect(redirectMock).not.toHaveBeenCalled();
+  });
+  it("productIdと一致しないenter_urlはredirectしない", async () => {
+    api(
+      {
+        entitled: false,
+        reason: "no_grant",
+        enter_url: "https://checkout.example/enter?product_id=prd_other",
+      },
+      200,
+    );
+    const html = await page();
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(html).toContain("この商品の購入権限がありません");
+    expect(html).not.toContain(secret);
+  });
+  it("ハンドオフ成功直後の印（cozeni_handoff）はenter_urlがあってもredirectしない", async () => {
+    api({ entitled: false, reason: "no_grant", enter_url: enterUrl }, 200);
+    const html = await page({ cozeni_handoff: "1" });
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(html).toContain("この商品の購入権限がありません");
+    expect(html).not.toContain(secret);
+  });
+  it("ハンドオフ成功直後の印が付いた状態で権利があれば、印を外したURLへ正規化する", async () => {
+    api({ entitled: true });
+    await expect(page({ cozeni_handoff: "1" })).rejects.toThrow();
+    expect(redirectMock).toHaveBeenCalledWith(
+      "https://creator.example/members",
+    );
+  });
+  it("cozeni_error・cozeni_handoffが重複クエリ（string[]）でも停止条件として扱う", async () => {
+    api({ entitled: false, reason: "no_grant", enter_url: enterUrl }, 200);
+    const html = renderToStaticMarkup(
+      await Members({
+        searchParams: Promise.resolve({
+          cozeni_error: ["invalid_code", "invalid_code"],
+        }),
+      }),
+    );
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(html).not.toContain(secret);
+  });
+  it("重複したcozeni_code（string[]）は無効なコードとして扱いhandoffへ転送しない", async () => {
+    await expect(
+      Members({
+        searchParams: Promise.resolve({
+          cozeni_code: ["a", "b"],
+        }),
+      }),
+    ).rejects.toThrow();
+    expect(redirectMock).toHaveBeenCalledWith(
+      "https://creator.example/members?cozeni_error=invalid_code",
+    );
   });
 });

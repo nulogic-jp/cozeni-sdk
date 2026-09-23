@@ -70,6 +70,15 @@ export const fixture = {
       body: {
         entitled: false,
         reason: "no_grant",
+        enter_url:
+          "https://checkout.example/enter?product_id=prd_0123456789abcdef0123456789abcdef",
+      },
+    },
+    {
+      status: 200,
+      body: {
+        entitled: false,
+        reason: "no_grant",
       },
     },
     {
@@ -77,6 +86,17 @@ export const fixture = {
       body: {
         entitled: false,
         reason: "revoked",
+        enter_url:
+          "https://checkout.example/enter?product_id=prd_0123456789abcdef0123456789abcdef",
+      },
+    },
+    {
+      status: 401,
+      body: {
+        entitled: false,
+        reason: "no_session",
+        enter_url:
+          "https://checkout.example/enter?product_id=prd_0123456789abcdef0123456789abcdef",
       },
     },
     {

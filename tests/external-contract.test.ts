@@ -183,13 +183,17 @@ function contractFetch(id: string, status: number, responseBody: unknown) {
     );
     expect(init?.method).toBe(operation.method);
     const headers = new Headers(init?.headers);
+    // 契約のsecurityが空({})の代替を含む場合、認証は任意（Cookie無しでも呼べる）。
+    const authOptional = operation.security?.some(
+      (scheme) => Object.keys(scheme).length === 0,
+    );
     if (operation.security?.some((scheme) => "CreatorApiKey" in scheme)) {
       expect(headers.get("Authorization")).toBe(`Bearer ${apiKey}`);
       expect(headers.has("Cookie")).toBe(false);
     } else if (
       operation.security?.some((scheme) => "CustomerCookie" in scheme)
     ) {
-      expect(headers.get("Cookie")).toBe(customerCookie);
+      if (!authOptional) expect(headers.get("Cookie")).toBe(customerCookie);
       expect(headers.has("Authorization")).toBe(false);
     } else {
       expect(headers.has("Authorization")).toBe(false);
@@ -349,17 +353,77 @@ describe("正式外部v1契約とSDK", () => {
     "購入者HTTP $status / $body は正本と同じ許可・拒否を返す",
     async ({ status, body }) => {
       const fetch = contractFetch("externalCheckEntitlements", status, body);
+      // 公開APIはcamelCase。正本fixtureのenter_urlはproduct.id（"prd_example"）とは
+      // 異なる商品IDの例（"prd_0123456789abcdef..."）で書かれているため、SDKの
+      // product_id一致検証によりこのproductIdでの問い合わせでは採用されない。
+      // 一致・不一致の採用可否そのものは専用テストで検証する。
+      const { enter_url: _enterUrl, ...expected } = body as Record<
+        string,
+        unknown
+      >;
       expect(
         await createCustomerClient({ apiOrigin, fetch }).checkEntitlement({
           productId: product.id,
           cookieHeader: `unrelated=discard; ${customerCookie}`,
         }),
-      ).toEqual(body);
+      ).toEqual(expected);
       expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual(
         fixture.entitlement_input,
       );
     },
   );
+  it("Cookie無しでも正本の権利確認APIを呼び、Cookieヘッダーを送らない", async () => {
+    const found = entitlements.find(
+      (item) => item.status === 401 && "enter_url" in item.body,
+    );
+    if (!found)
+      throw new Error("no_session + enter_urlのfixtureがありません。");
+    const fetch = contractFetch(
+      "externalCheckEntitlements",
+      found.status,
+      found.body,
+    );
+    const result = await createCustomerClient({
+      apiOrigin,
+      fetch,
+    }).checkEntitlement({
+      productId: product.id,
+    });
+    // 正本fixtureのenter_urlはproduct.idと異なる商品IDの例のため採用されない
+    // （上のテストと同じ理由）。ここではCookie無し呼び出し自体を検証する。
+    expect(result).toEqual({ entitled: false, reason: "no_session" });
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("Cookie")).toBe(
+      false,
+    );
+  });
+  it("enter_urlのproduct_idが問い合わせたproductIdと一致するときだけ採用する", async () => {
+    const matching = `https://checkout.example/enter?product_id=${product.id}`;
+    const mismatched =
+      "https://checkout.example/enter?product_id=prd_other0000000000000000000000000000";
+    for (const [enterUrlValue, expectAdopted] of [
+      [matching, true],
+      [mismatched, false],
+    ] as const) {
+      const body = {
+        entitled: false,
+        reason: "no_grant",
+        enter_url: enterUrlValue,
+      };
+      const fetch = contractFetch("externalCheckEntitlements", 200, body);
+      const result = await createCustomerClient({
+        apiOrigin,
+        fetch,
+      }).checkEntitlement({
+        productId: product.id,
+        cookieHeader: customerCookie,
+      });
+      expect(result).toEqual(
+        expectAdopted
+          ? { entitled: false, reason: "no_grant", enterUrl: matching }
+          : { entitled: false, reason: "no_grant" },
+      );
+    }
+  });
   it.each([400, 503])(
     "コード交換HTTP %sではAPIエラーの契約を維持する",
     async (status) => {

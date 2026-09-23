@@ -5,6 +5,8 @@ import {
   createCustomerClient,
   createManagementClient,
   customerCookie,
+  enterRedirectResponse,
+  enterRedirectUrl,
   trustedSiteUrl,
 } from "../src/index.js";
 
@@ -153,8 +155,24 @@ describe("購入者API", () => {
       }),
     ).toEqual({ entitled: false, reason: "unavailable" });
   });
-  it("不正Cookieと重複Cookieは送信しない", async () => {
-    const fetch = vi.fn();
+  it("Cookie無しでも権利確認APIを呼ぶ（未認証がこのAPIの主要な入口のため）", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(ok({ entitled: false, reason: "no_session" }, 401));
+    const client = createCustomerClient({ apiOrigin, fetch });
+    expect(await client.checkEntitlement({ productId: "p" })).toEqual({
+      entitled: false,
+      reason: "no_session",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("Cookie")).toBe(
+      false,
+    );
+  });
+  it("不正Cookieと重複Cookieは送信せず、Cookie無しとしてAPIを呼ぶ", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(ok({ entitled: false, reason: "no_session" }, 401));
     const client = createCustomerClient({ apiOrigin, fetch });
     expect(
       await client.checkEntitlement({
@@ -162,7 +180,99 @@ describe("購入者API", () => {
         cookieHeader: "cozeni_customer=a; cozeni_customer=b",
       }),
     ).toEqual({ entitled: false, reason: "no_session" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("Cookie")).toBe(
+      false,
+    );
+  });
+  it("productId未指定・上限超過（200文字）は呼び出し前にno_grantとして拒否する", async () => {
+    const fetch = vi.fn();
+    const client = createCustomerClient({ apiOrigin, fetch });
+    for (const productId of ["", "p".repeat(201)]) {
+      expect(await client.checkEntitlement({ productId })).toEqual({
+        entitled: false,
+        reason: "no_grant",
+      });
+    }
+    // API障害（unavailable）と混同されないよう、契約上の入力違反はAPIを呼ばずに
+    // 判定する。200文字ちょうどは呼び出しを許可する。
     expect(fetch).not.toHaveBeenCalled();
+    await client.checkEntitlement({
+      productId: "p".repeat(200),
+      cookieHeader: "cozeni_customer=a.b.c",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("enter_urlは構造検証（https必須・pathname固定・product_id一致・fragment無し）を通ったものだけ採用する", async () => {
+    const productId = "prd_0123456789abcdef0123456789abcdef";
+    const validUrl = `https://checkout.example/enter?product_id=${productId}`;
+    const cases: [unknown, string | undefined][] = [
+      [validUrl, validUrl],
+      // httpはloopbackだけ許可する。
+      [
+        `http://127.0.0.1:8787/enter?product_id=${productId}`,
+        `http://127.0.0.1:8787/enter?product_id=${productId}`,
+      ],
+      [`http://checkout.example/enter?product_id=${productId}`, undefined],
+      ["javascript:alert(1)", undefined],
+      [
+        `https://user:pass@checkout.example/enter?product_id=${productId}`,
+        undefined,
+      ],
+      ["not a url", undefined],
+      // pathnameが/enter固定でない。
+      [`https://checkout.example/other?product_id=${productId}`, undefined],
+      // クエリがproduct_id以外を含む、または複数ある。
+      [`https://checkout.example/enter?product_id=${productId}&x=1`, undefined],
+      // fragmentを含む。
+      [`https://checkout.example/enter?product_id=${productId}#top`, undefined],
+      // product_idが問い合わせたproductIdと一致しない。
+      ["https://checkout.example/enter?product_id=prd_other", undefined],
+      [undefined, undefined],
+      [42, undefined],
+    ];
+    for (const [enterUrlInput, expected] of cases) {
+      const body: Record<string, unknown> = {
+        entitled: false,
+        reason: "no_grant",
+      };
+      if (enterUrlInput !== undefined) body.enter_url = enterUrlInput;
+      const client = createCustomerClient({
+        apiOrigin,
+        fetch: vi.fn().mockResolvedValue(ok(body)),
+      });
+      const result = await client.checkEntitlement({
+        productId,
+        cookieHeader: "cozeni_customer=a.b.c",
+      });
+      expect(result).toEqual(
+        expected
+          ? { entitled: false, reason: "no_grant", enterUrl: expected }
+          : { entitled: false, reason: "no_grant" },
+      );
+    }
+  });
+  it("unavailableにはenter_urlが付かない契約を維持する", async () => {
+    const client = createCustomerClient({
+      apiOrigin,
+      fetch: vi.fn().mockResolvedValue(
+        ok(
+          {
+            entitled: false,
+            reason: "unavailable",
+            enter_url: "https://checkout.example/enter?product_id=prd_x",
+          },
+          503,
+        ),
+      ),
+    });
+    // 503はunavailable固定契約のため、余分なenter_urlが混入しても無視する。
+    expect(
+      await client.checkEntitlement({
+        productId: "p",
+        cookieHeader: "cozeni_customer=a.b.c",
+      }),
+    ).toEqual({ entitled: false, reason: "unavailable" });
   });
   it("コードの自動再送をしない", async () => {
     const fetch = vi
@@ -177,6 +287,55 @@ describe("購入者API", () => {
       createCustomerClient({ apiOrigin, fetch }).exchangeHandoff("expired"),
     ).rejects.toMatchObject({ code: "invalid_code" });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+describe("enter_urlへのリダイレクト判定（フレームワーク非依存ヘルパー）", () => {
+  const productId = "prd_x";
+  const enterUrl = `https://checkout.example/enter?product_id=${productId}`;
+  const denied = {
+    entitled: false as const,
+    reason: "no_grant" as const,
+    enterUrl,
+  };
+  it("enter_urlがある拒否だけをリダイレクト対象にする", () => {
+    expect(enterRedirectUrl(denied, productId)?.href).toBe(enterUrl);
+    const response = enterRedirectResponse(denied, productId);
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("Location")).toBe(enterUrl);
+    expect(response?.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response?.headers.get("Referrer-Policy")).toBe("no-referrer");
+  });
+  it("手で組み立てたEntitlementでも構造検証を再実行する（productId不一致は却下）", () => {
+    expect(enterRedirectUrl(denied, "prd_other")).toBeUndefined();
+    expect(enterRedirectResponse(denied, "prd_other")).toBeUndefined();
+  });
+  it("手で組み立てたEntitlementの不正なenterUrl（javascript:等）はredirect()やLocationに届かない", () => {
+    const malicious = {
+      entitled: false as const,
+      reason: "no_grant" as const,
+      enterUrl: "javascript:alert(document.cookie)",
+    };
+    expect(enterRedirectUrl(malicious, productId)).toBeUndefined();
+    expect(enterRedirectResponse(malicious, productId)).toBeUndefined();
+  });
+  it("許可済みはリダイレクト対象にしない", () => {
+    expect(enterRedirectUrl({ entitled: true }, productId)).toBeUndefined();
+    expect(
+      enterRedirectResponse({ entitled: true }, productId),
+    ).toBeUndefined();
+  });
+  it("unavailableはenter_urlを持てないためリダイレクト対象にしない", () => {
+    const unavailable = {
+      entitled: false as const,
+      reason: "unavailable" as const,
+    };
+    expect(enterRedirectUrl(unavailable, productId)).toBeUndefined();
+    expect(enterRedirectResponse(unavailable, productId)).toBeUndefined();
+  });
+  it("enter_urlが無い拒否はリダイレクト対象にしない", () => {
+    const noUrl = { entitled: false as const, reason: "no_session" as const };
+    expect(enterRedirectUrl(noUrl, productId)).toBeUndefined();
+    expect(enterRedirectResponse(noUrl, productId)).toBeUndefined();
   });
 });
 describe("自サイト境界", () => {
