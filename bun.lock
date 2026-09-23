@@ -4,16 +4,18 @@
   "workspaces": {
     "": {
       "name": "@nulogic/cozeni-sdk",
+      "dependencies": {
+        "server-only": "^0.0.1",
+      },
       "devDependencies": {
         "@biomejs/biome": "2.5.12",
         "@types/node": "^24.3.1",
         "next": "^15.5.4",
-        "server-only": "^0.0.1",
         "typescript": "^5.9.2",
         "vitest": "5.0.0",
       },
       "peerDependencies": {
-        "next": ">=14.0.0",
+        "next": ">=15.0.0",
       },
       "optionalPeers": [
         "next",

@@ -79,7 +79,8 @@ export interface RequireEntitlementOptions extends NextEntitlementOptions {
 
 /**
  * pageの入口専用。redirectするのはこの関数だけで、Server Action・Route Handlerでは
- * 使わない（それらはredirectしないnextEntitlement() + denialResponse()を使う）。
+ * 使わない。Route Handlerは`nextEntitlement()` + `denialResponse()`（Web Response）
+ * を、Server Actionは`nextEntitlement()`の結果をplain objectとして返す形を使う。
  * 権利があれば何もしない。権利が無くenter_urlが使え、停止条件（haltRedirect）にも
  * 当たらなければ、next/navigationのredirect()でenter_urlへ遷移する（制御フロー
  * 例外を投げる）。それ以外（unavailable・enter_url無し・停止条件該当）は
@@ -106,20 +107,28 @@ export function denialStatus(reason: EntitlementDenied["reason"]): number {
 }
 
 /**
- * Route Handler（JSON API）・Server Action向け。この関数自体はredirect()を
- * 呼ばない。enter_urlをJSON本文へ含めた拒否Responseを返すだけなので、fetchの
- * 呼び出し元をHTMLへ飛ばさない。redirectするのはpage専用のrequireEntitlement()
- * だけで、それ以外の入口はこちらとnextEntitlement()を組み合わせて使う。
+ * Route Handler（JSON API）専用。この関数自体はredirect()を呼ばない。
+ * enter_urlをJSON本文へ含めた拒否Responseを返すだけなので、fetchの呼び出し元を
+ * HTMLへ飛ばさない。redirectするのはpage専用のrequireEntitlement()だけで、
+ * Route Handlerではこちらと`nextEntitlement()`を組み合わせて使う。
+ *
+ * Server Actionはこの関数を使わない。Web Responseを返すべきではなく、呼び出し元
+ * （クライアントコンポーネント）へ渡す通常の戻り値（plain object）で拒否理由を
+ * 表現する。`nextEntitlement()`の結果や`AccessDenied.reason`をそのまま返すこと。
+ *
+ * `entitlement.enterUrl`は呼び出し元が手で組み立てた値の可能性があるため、
+ * enterRedirectUrl()と同じ構造検証（productId一致を含む）を再度通してからJSONへ
+ * 書き出す。第2引数には実際に問い合わせたproductIdを渡すこと。
  */
-export function denialResponse(entitlement: EntitlementDenied): Response {
+export function denialResponse(
+  entitlement: EntitlementDenied,
+  productId: string,
+): Response {
   const body: { error: EntitlementDenied["reason"]; enter_url?: string } = {
     error: entitlement.reason,
   };
-  // enterUrlはnextEntitlement()が返す値（checkEntitlement内でvalidEnterUrl()による
-  // 構造検証を通過済み）をそのまま転記する。redirect()やLocationへは使わない
-  // （このJSON本文を実際にredirectへ使うかどうかはfetchの呼び出し元の責任）。
-  if (entitlement.reason !== "unavailable" && entitlement.enterUrl)
-    body.enter_url = entitlement.enterUrl;
+  const target = enterRedirectUrl(entitlement, productId);
+  if (target) body.enter_url = target.href;
   return Response.json(body, {
     status: denialStatus(entitlement.reason),
     headers: {

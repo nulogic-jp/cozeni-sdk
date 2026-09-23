@@ -31,6 +31,16 @@ export function setting(name: string): string {
   if (!value?.trim()) throw new ServerConfigurationError(name);
   return value;
 }
+// denialResponse()のenter_url再検証（productId一致）に使う。未設定・不正時は
+// 空文字を返し、一致しないため安全にenter_urlが省略される
+// （この場合はもともとCOZENI_PRODUCT_ID不備でunavailable拒否になっている）。
+export function productId(): string {
+  try {
+    return setting("COZENI_PRODUCT_ID");
+  } catch {
+    return "";
+  }
+}
 export function siteUrl(path: string) {
   try {
     return trustedSiteUrl(setting("COZENI_SITE_ORIGIN"), path);
@@ -77,7 +87,8 @@ export { AccessDenied, denialResponse, denialStatus };
  * できない場合はAccessDeniedを投げる。redirect()はNext.jsの制御フロー例外を
  * 投げるため、この関数の呼び出しを広いtry/catchで包まない
  * （AccessDeniedだけを捕捉する）。Server ActionとRoute Handlerではこの関数を
- * 使わず、entitlement() / nextEntitlement() + denialResponse()を使う。
+ * 使わない。Route Handlerは entitlement() + denialResponse()（Web Response）、
+ * Server Actionは entitlement() の結果をplain objectとして返す形を使う。
  */
 export async function requireEntitlement(haltRedirect = false): Promise<void> {
   let options: RequireEntitlementOptions;

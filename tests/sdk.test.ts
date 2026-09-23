@@ -91,6 +91,30 @@ describe("管理API", () => {
       expect(String(error)).not.toContain("secret");
     }
   });
+  it("terms_consent_requiredをinvalid_responseへ潰さず区別する", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "terms_consent_required",
+            message: "規約改定後に未同意です。",
+            request_id: "req_terms",
+          },
+        }),
+        { status: 403 },
+      ),
+    );
+    const client = createManagementClient({
+      apiOrigin,
+      apiKey: "secret",
+      fetch,
+    });
+    await expect(client.account.get()).rejects.toMatchObject({
+      status: 403,
+      code: "terms_consent_required",
+      requestId: "req_terms",
+    });
+  });
 });
 describe("購入者API", () => {
   it("購入者Cookieだけを転送しAPIキーを要求しない", async () => {
@@ -224,6 +248,11 @@ describe("購入者API", () => {
       [`https://checkout.example/other?product_id=${productId}`, undefined],
       // クエリがproduct_id以外を含む、または複数ある。
       [`https://checkout.example/enter?product_id=${productId}&x=1`, undefined],
+      // product_idが同じ値でも重複していれば拒否する。
+      [
+        `https://checkout.example/enter?product_id=${productId}&product_id=${productId}`,
+        undefined,
+      ],
       // fragmentを含む。
       [`https://checkout.example/enter?product_id=${productId}#top`, undefined],
       // product_idが問い合わせたproductIdと一致しない。

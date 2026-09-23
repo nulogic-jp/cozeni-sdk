@@ -127,6 +127,21 @@ test("ハンドオフ成功直後の印が付いたリクエストで許可さ�
   );
 });
 
+test("cozeni_errorだけが付いた状態で許可された場合も、印を外したURLへ正規化する", async () => {
+  const handle = handler({
+    checkEntitlement: async () => ({ entitled: true }),
+  });
+  const response = await handle(
+    new Request("https://site.example.com/members?cozeni_error=invalid_code"),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("Location"),
+    "https://site.example.com/members",
+  );
+});
+
 test("交換失敗直後(cozeni_error)の拒否もenter_urlへ再リダイレクトしない", async () => {
   const handle = handler({
     checkEntitlement: async () => ({

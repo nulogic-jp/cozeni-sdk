@@ -151,9 +151,9 @@ export function createWebHandler(config, dependencies = {}) {
         : enterRedirectResponse(result, productId);
       return redirectResponse ?? deniedResponse(result);
     }
-    // ここに到達したら権利がある。ハンドオフ成功直後の印が付いていれば、
-    // 印を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
-    if (requestUrl.searchParams.has("cozeni_handoff")) {
+    // ここに到達したら権利がある。ハンドオフ成功直後・交換失敗の印が
+    // 付いていれば、両方を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
+    if (haltRedirect) {
       return new Response(null, {
         status: 303,
         headers: { ...privateHeaders, Location: membersUrl.href },

@@ -195,12 +195,16 @@ describe("レビュー指摘の回帰", () => {
     );
   }
   it.each(["invalid_code", "unavailable"])(
-    "%s交換失敗後も既存セッションを再認可する",
+    "%s交換失敗後も既存セッションを再認可し、cozeni_errorを外したURLへ正規化する",
     async (reason) => {
+      // cozeni_error付きで権利があれば、印を外したクリーンなURLへredirectする
+      // （次のリクエストで保護コンテンツが表示される）。
       api({ entitled: true });
-      const html = await page({ cozeni_error: reason });
-      expect(html).toContain(secret);
-      expect(fetch).toHaveBeenCalledTimes(2);
+      await expect(page({ cozeni_error: reason })).rejects.toThrow();
+      expect(redirectMock).toHaveBeenCalledWith(
+        "https://creator.example/members",
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
     },
   );
   it("交換障害後にセッションがなければ障害案内を維持する", async () => {
@@ -410,6 +414,22 @@ describe("enter_urlへの自動リダイレクト", () => {
   it("ハンドオフ成功直後の印が付いた状態で権利があれば、印を外したURLへ正規化する", async () => {
     api({ entitled: true });
     await expect(page({ cozeni_handoff: "1" })).rejects.toThrow();
+    expect(redirectMock).toHaveBeenCalledWith(
+      "https://creator.example/members",
+    );
+  });
+  it("cozeni_errorだけが付いた状態で権利があっても、印を外したURLへ正規化する", async () => {
+    api({ entitled: true });
+    await expect(page({ cozeni_error: "invalid_code" })).rejects.toThrow();
+    expect(redirectMock).toHaveBeenCalledWith(
+      "https://creator.example/members",
+    );
+  });
+  it("cozeni_handoffとcozeni_errorが両方付いていても、権利があれば両方外して正規化する", async () => {
+    api({ entitled: true });
+    await expect(
+      page({ cozeni_handoff: "1", cozeni_error: "invalid_code" }),
+    ).rejects.toThrow();
     expect(redirectMock).toHaveBeenCalledWith(
       "https://creator.example/members",
     );

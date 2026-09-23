@@ -63,7 +63,7 @@
     "lint": "biome check src tests examples/nextjs examples/javascript-server skills/cozeni-setup/scripts scripts vitest.config.ts",
     "format": "biome check --write src tests examples/nextjs examples/javascript-server skills scripts vitest.config.ts",
     "format:check": "biome format src tests examples/nextjs examples/javascript-server skills scripts vitest.config.ts",
-    "check": "bun run lint && bun run typecheck && bun run typecheck:root && bun run build && bun run test && bun run test:package && bun run test:repository && bun run test:example",
+    "check": "bun run lint && bun run typecheck && bun run typecheck:root && bun run build && bun run test && bun run test:package && bun run test:repository && bun run test:example && bun run test:next-runtime",
     "prepack": "bun run build",
     "test:package": "node scripts/verify-package.mjs",
     "test:next-runtime": "node scripts/verify-next-runtime.mjs",

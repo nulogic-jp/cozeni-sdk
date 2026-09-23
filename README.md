@@ -118,7 +118,9 @@ export default async function Page() {
 }
 ```
 
-**リダイレクトするのはpageの入口だけです。** `requireEntitlement()`はpage専用で、next/navigationの`redirect()`（制御フロー例外）を投げることがあります。呼び出しは`AccessDenied`だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。無限リダイレクトを避けるため、ハンドオフのコード交換直後（`cozeni_code`処理直後・成功直後のマーカー付き・`cozeni_error`付き）は`haltRedirect: true`を渡します。Server ActionとRoute Handler（JSON API）ではリダイレクトせず、`nextEntitlement()` + `denialResponse()`（非リダイレクトのデータ層）を使ってJSON応答や戻り値へ`enter_url`・拒否理由を含めます。詳細は [`examples/nextjs/lib/cozeni.ts`](examples/nextjs/lib/cozeni.ts) を参照してください。
+**リダイレクトするのはpageの入口だけです。** `requireEntitlement()`はpage専用で、next/navigationの`redirect()`（制御フロー例外）を投げることがあります。呼び出しは`AccessDenied`だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。無限リダイレクトを避けるため、ハンドオフのコード交換直後（`cozeni_code`処理直後・成功直後のマーカー付き・`cozeni_error`付き）は`haltRedirect: true`を渡します。
+
+Server ActionとRoute Handlerではリダイレクトしません。**Route Handler（JSON API）**は`nextEntitlement()`の結果を`denialResponse(entitlement, productId)`（Web Response）へ渡し、401/403/503のJSONへ`enter_url`を含めます（`productId`はenter_url採用の再検証に使うため、実際に問い合わせたIDを渡してください）。**Server Action**はWeb Responseを返すべきではないため`denialResponse()`を使わず、`nextEntitlement()`の結果（または`AccessDenied.reason`）をそのままplain objectとして返し、呼び出し元のクライアントコンポーネントで表示を切り替えます。詳細は [`examples/nextjs/lib/cozeni.ts`](examples/nextjs/lib/cozeni.ts) と [`examples/nextjs/app/members/actions.ts`](examples/nextjs/app/members/actions.ts) を参照してください。
 
 | 境界 | 実装 |
 |---|---|
@@ -139,12 +141,8 @@ export default async function Page() {
 bun install --frozen-lockfile
 bun run setup:hooks
 bun run check
-
-# 導入例は公開npmのSDKを参照する
-cd examples/nextjs && bun install && bun run build && cd ../..
-bun run test:next-runtime
 ```
 
 開発用フックは `bun run setup:hooks` で `core.hooksPath` を `.githooks` に設定します。以後コミット前に `format:check` / `lint` / `typecheck` / `test` が走ります。整形とlintの自動修正は `bun run format`、迂回は `git commit --no-verify` です。[CI](.github/workflows/ci.yml) はmainへのpushとpull requestでSDKと導入例のビルドを検証します。
 
-`bun run test:next-runtime` は `check` に含めません。実際に`next build` / `next start`したサーバーへHTTPで到達する統合テストのため、`examples/nextjs`側で別途`bun install && bun run build`を済ませる前提があり（READMEのコマンド例参照）、`check`が要求する「単体で完結する」検証とは前提が異なるためです。ローカルのCozeni API互換モックを起動して、外部enter_urlへのリダイレクト、ハンドオフ成功直後の停止条件、Route Handler・Server Actionが実際にリダイレクトしないことを実HTTPで確認します。
+`bun run test:next-runtime` は `check` に含みます。HEADをnpm packしたtarball（`scripts/example-consumer.mjs`）で一時consumerを作り、そこで`bun install` / `next build` / `next start`まで自己完結で行うため、事前の手動セットアップは不要です。ローカルのCozeni API互換モックを起動し、実際に起動した本番相当サーバーへHTTPで到達して、外部enter_urlへのリダイレクト、ハンドオフ成功直後の停止条件と正規化、Route Handlerが実際にリダイレクトしないことを確認します（所要時間は概ね20秒未満）。Server Actionの非リダイレクト・plain object返却はNext.jsのAction ID解決が実HTTPでは複雑なため、vitestのユニットテスト（`examples/nextjs/tests/security.test.ts`）側で検証します。

@@ -1,13 +1,19 @@
+/**
+ * Next.js導入例を、HEADをnpm packした配布物で実際にnext start（本番相当の
+ * サーバー）まで起動して検証する。examples/nextjs/package.json は公開npmの
+ * バージョン範囲を指すため、単に作業ツリーのexamples/nextjsをそのまま起動すると
+ * 「install済みならたまたま動く」だけでHEADを検証したことにならない。
+ * prepareExampleConsumer()でHEADのtarballを差し込んだ一時consumerを用意し、
+ * そこでinstall・buildしてから起動する。
+ */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { prepareExampleConsumer, run } from "./example-consumer.mjs";
 
-const directory = fileURLToPath(
-  new URL("../examples/nextjs/", import.meta.url),
-);
 const marker = "レビュー回帰検証用の保護本文";
 const productId = "review_fixture";
 // 実環境の接続値・管理キーを使わず、外部APIにも接続しない。
@@ -87,7 +93,7 @@ function createMockCozeniApi(origin) {
 }
 
 /** `next start`を起動し、応答可能になるまで待つ。 */
-function startNext(port, env) {
+function startNext(directory, port, env) {
   const child = spawn(
     process.execPath,
     [
@@ -132,11 +138,11 @@ async function stopNext(child, exited) {
   clearTimeout(timer);
 }
 
-// --- シナリオ1: API接続不能（既存の到達不能origin）。unavailableで拒否する。 ---
-async function verifyUnreachableApi() {
+// --- シナリオ1: API接続不能（到達不能origin）。unavailableで拒否する。 ---
+async function verifyUnreachableApi(directory) {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
-  const { child, exited } = startNext(port, {
+  const { child, exited } = startNext(directory, port, {
     COZENI_API_ORIGIN: "http://127.0.0.1:1",
     COZENI_SITE_ORIGIN: origin,
     COZENI_PRODUCT_ID: productId,
@@ -179,9 +185,7 @@ async function verifyUnreachableApi() {
       );
       assert.match(response.headers.get("cache-control") ?? "", /no-store/);
     }
-    const files = await readdir(
-      new URL("../examples/nextjs/.next/static/chunks/", import.meta.url),
-    );
+    const files = await readdir(join(directory, ".next/static/chunks"));
     const chunk = files.find((file) => file.endsWith(".js"));
     assert.ok(chunk, "検証対象の静的JSがありません。");
     const asset = await fetch(`${origin}/_next/static/chunks/${chunk}`);
@@ -194,7 +198,7 @@ async function verifyUnreachableApi() {
 }
 
 // --- シナリオ2: モックAPIで拒否・enter_url・停止条件・正規化・Route Handlerを検証する。 ---
-async function verifyMockedApi() {
+async function verifyMockedApi(directory) {
   const apiPort = await freePort();
   const apiOrigin = `http://127.0.0.1:${apiPort}`;
   const mockApi = createMockCozeniApi(apiOrigin);
@@ -202,7 +206,7 @@ async function verifyMockedApi() {
 
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
-  const { child, exited } = startNext(port, {
+  const { child, exited } = startNext(directory, port, {
     COZENI_API_ORIGIN: apiOrigin,
     COZENI_SITE_ORIGIN: origin,
     COZENI_PRODUCT_ID: productId,
@@ -259,11 +263,15 @@ async function verifyMockedApi() {
     );
 
     // ハンドオフ成功→cozeni_handoff付きで/membersへ。権利があるので
-    // 印を外したURLへ正規化する（ループしない）。
-    const normalized = await fetch(`${origin}/members?cozeni_handoff=1`, {
-      redirect: "manual",
-      headers: { Cookie: "cozeni_customer=scn-normalize" },
-    });
+    // 印を外したURLへ正規化する（ループしない）。cozeni_errorも同時に付いて
+    // いれば、それも一緒に外す。
+    const normalized = await fetch(
+      `${origin}/members?cozeni_handoff=1&cozeni_error=invalid_code`,
+      {
+        redirect: "manual",
+        headers: { Cookie: "cozeni_customer=scn-normalize" },
+      },
+    );
     assert.equal(
       normalized.status,
       307,
@@ -272,7 +280,7 @@ async function verifyMockedApi() {
     assert.equal(
       normalized.headers.get("location"),
       `${origin}/members`,
-      "印を外したクリーンなURLへ正規化する。",
+      "cozeni_handoff・cozeni_errorの両方を外したクリーンなURLへ正規化する。",
     );
     // 正規化後のURLへ実際にたどり着いても再びredirectしない（ループしない）。
     const settled = await fetch(`${origin}/members`, {
@@ -318,9 +326,19 @@ async function verifyMockedApi() {
   }
 }
 
-await verifyUnreachableApi();
-await verifyMockedApi();
-console.log(
-  "実HTTP回帰成功: handoff転送・接続不能時の拒否画面・enter_urlへのredirect・" +
-    "ハンドオフ成功直後の停止と正規化・Route Handlerの非redirect・静的JSキャッシュ維持",
+const { packed, consumer, cleanup } = await prepareExampleConsumer(
+  "cozeni-runtime-check-",
 );
+try {
+  run("bun", ["install"], consumer);
+  run("bun", ["run", "build"], consumer, { NEXT_TELEMETRY_DISABLED: "1" });
+  await verifyUnreachableApi(consumer);
+  await verifyMockedApi(consumer);
+  console.log(
+    `実HTTP回帰成功: ${packed.name}@${packed.version} の配布物で` +
+      "handoff転送・接続不能時の拒否画面・enter_urlへのredirect・" +
+      "ハンドオフ成功直後の停止と正規化・Route Handlerの非redirect・静的JSキャッシュ維持",
+  );
+} finally {
+  await cleanup();
+}

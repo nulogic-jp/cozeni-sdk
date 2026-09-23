@@ -92,6 +92,7 @@ const knownCodes = new Set([
   "invalid_code",
   "unauthorized",
   "insufficient_scope",
+  "terms_consent_required",
   "product_not_found",
   "checkout_link_not_found",
   "idempotency_conflict",

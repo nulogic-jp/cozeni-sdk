@@ -74,9 +74,9 @@ export default async function Members({
         : error.reason;
     return <Denied reason={reason} />;
   }
-  // ここに到達したら権利がある。ハンドオフ成功直後の印が付いていれば、
-  // 印を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
-  if (query.cozeni_handoff !== undefined) {
+  // ここに到達したら権利がある。ハンドオフ成功直後・交換失敗の印が付いていれば、
+  // 両方を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
+  if (haltRedirect) {
     let target: URL | undefined;
     try {
       target = siteUrl("/members");
