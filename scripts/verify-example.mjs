@@ -29,7 +29,8 @@ function run(command, args, cwd, env) {
 
 try {
   // prepackのbuildは呼び出し側（bun run check）が済ませている。
-  const [packed] = JSON.parse(
+  // npm 11までは配列、npm 12からはpackage名をキーにしたオブジェクトを返す。
+  const parsed = JSON.parse(
     execFileSync(
       "npm",
       [
@@ -43,6 +44,7 @@ try {
       { cwd: root, encoding: "utf8" },
     ),
   );
+  const [packed] = Array.isArray(parsed) ? parsed : Object.values(parsed);
   const tarball = join(temporary, packed.filename);
 
   const consumer = join(temporary, "example");

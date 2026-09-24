@@ -107,7 +107,9 @@ try {
     ],
     { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
-  const [packed] = JSON.parse(output);
+  // npm 11までは配列、npm 12からはpackage名をキーにしたオブジェクトを返す。
+  const parsed = JSON.parse(output);
+  const [packed] = Array.isArray(parsed) ? parsed : Object.values(parsed);
   assert.equal(packed.name, packageJson.name);
   assert.equal(packed.version, expectedVersion);
 

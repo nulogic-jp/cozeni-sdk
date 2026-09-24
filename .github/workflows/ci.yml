@@ -29,6 +29,10 @@ jobs:
         with:
           node-version: 22
 
+      # Publishと同じnpmで検査する。npmの版で`npm pack --json`の出力形式が変わるため。
+      - name: npmを固定版へ更新
+        run: npm install -g npm@12.0.2
+
       - name: 依存を導入
         run: bun install --frozen-lockfile
 
