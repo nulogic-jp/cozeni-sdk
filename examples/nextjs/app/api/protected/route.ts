@@ -1,9 +1,8 @@
+import { AccessDenied, denialResponse } from "@nulogic/cozeni-sdk/next";
 import {
-  AccessDenied,
-  denialStatus,
+  productId,
   protectedData,
   reportServerError,
-  requireEntitlement,
 } from "../../../lib/cozeni";
 export const dynamic = "force-dynamic";
 export async function GET() {
@@ -12,14 +11,16 @@ export async function GET() {
     "Referrer-Policy": "no-referrer",
   };
   try {
-    await requireEntitlement();
     return Response.json(await protectedData(), { headers });
   } catch (error) {
     reportServerError(error, "保護データAPI");
-    const reason = error instanceof AccessDenied ? error.reason : "unavailable";
-    return Response.json(
-      { error: reason },
-      { status: denialStatus(reason), headers },
+    // Route Handlerはリダイレクトせず、enter_urlをJSON本文へ含めて拒否する。
+    // denialResponse()はproductId一致をenter_url採用の条件に含めて再検証する。
+    return denialResponse(
+      error instanceof AccessDenied
+        ? error.entitlement
+        : { entitled: false, reason: "unavailable" },
+      productId(),
     );
   }
 }

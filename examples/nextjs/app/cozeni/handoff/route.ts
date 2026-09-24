@@ -29,6 +29,10 @@ export async function GET(request: Request) {
       throw new CozeniError("invalid_code", 400);
     const { token } = await customerClient().exchangeHandoff(codes[0]);
     headers.set("Set-Cookie", customerCookie(token, target.origin));
+    // ハンドオフ成功直後を示す秘密を含まない印。/membersはこれかcozeni_errorが
+    // あれば再リダイレクトを止める（enter_urlへの無限リダイレクトの回避）。
+    // 権利が確認できたらこの印はすぐに外したURLへ正規化する。
+    target.searchParams.set("cozeni_handoff", "1");
   } catch (error) {
     // 交換失敗は既存Cookieを消去せず、戻り先で改めて認可する。
     // コードや例外の生情報をログ・URLへ残さず、失敗後は自動再交換しない。
