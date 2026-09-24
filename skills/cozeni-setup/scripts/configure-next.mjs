@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { open, readFile, rename } from "node:fs/promises";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { SetupError, validateConfig } from "./setup.mjs";
+import { isEntrypoint, SetupError, validateConfig } from "./setup.mjs";
 
 const recovery = {
   setup_incomplete:
@@ -78,10 +77,7 @@ export async function configureNext(statePath, envPath) {
   await rename(temporary, envPath);
   return Object.keys(values);
 }
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
+if (isEntrypoint(import.meta.url)) {
   const [statePath, envPath = ".env.local"] = process.argv.slice(2);
   if (!statePath) {
     process.stderr.write("状態ファイルのパスを指定してください。\n");

@@ -1,5 +1,6 @@
+import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createWebHandler } from "./web-handler.mjs";
 
 function incomingHeaders(headers) {
@@ -57,7 +58,20 @@ function environmentConfig() {
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// symlink経由で実行されても判定できるよう、両方を実パスで比べる。
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(fileURLToPath(import.meta.url)) ===
+      realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint()) {
   const port = Number(process.env.PORT ?? "3100");
   const server = createNodeServer(environmentConfig());
   server.listen(port, "127.0.0.1", () => {
