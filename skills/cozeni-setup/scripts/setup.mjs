@@ -136,7 +136,7 @@ async function identity(client, config, writes) {
 }
 export async function inspectProducts({ config, client }) {
   config = validateConfig(config);
-  await identity(client, config, false);
+  const account = await identity(client, config, false);
   const products = [];
   const seen = new Set();
   let cursor;
@@ -150,7 +150,9 @@ export async function inspectProducts({ config, client }) {
     if (cursor && seen.has(cursor)) fail("invalid_pagination");
     seen.add(cursor);
   } while (cursor);
-  return products;
+  // 販売可否（sales）は古いAPIバージョンでは返らないため、無ければnullで明示する。
+  // APIキーや秘密は含まないため、そのまま出力に含めてよい。
+  return { products, sales: account.sales ?? null };
 }
 export async function setupProduct({
   config,

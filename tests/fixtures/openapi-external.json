@@ -162,6 +162,9 @@
           "api_version": {
             "type": "string",
             "enum": ["v1"]
+          },
+          "sales": {
+            "$ref": "#/components/schemas/ExternalSales"
           }
         },
         "required": [
@@ -169,9 +172,95 @@
           "api_key_id",
           "scopes",
           "environment",
-          "api_version"
+          "api_version",
+          "sales"
         ],
         "additionalProperties": false
+      },
+      "ExternalSales": {
+        "type": "object",
+        "properties": {
+          "can_sell": {
+            "type": "boolean"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExternalSalesBlocker"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["payouts_disabled"]
+            }
+          }
+        },
+        "required": ["can_sell", "blockers", "warnings"],
+        "additionalProperties": false
+      },
+      "ExternalSalesBlocker": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "review_not_submitted",
+                  "review_pending",
+                  "stripe_not_connected",
+                  "stripe_onboarding_incomplete",
+                  "stripe_verification_pending"
+                ]
+              },
+              "action_url": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "required": ["code", "action_url"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": ["review_rejected"]
+              },
+              "action_url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "rejection": {
+                "type": "object",
+                "properties": {
+                  "reason_code": {
+                    "type": "string",
+                    "enum": [
+                      "tokushoho_missing_contact",
+                      "tokushoho_unreachable",
+                      "website_unreachable",
+                      "description_insufficient",
+                      "prohibited_content",
+                      "other"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": ["reason_code", "note"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["code", "action_url", "rejection"],
+            "additionalProperties": false
+          }
+        ]
       },
       "ExternalProductList": {
         "type": "object",
@@ -423,7 +512,7 @@
         ],
         "responses": {
           "200": {
-            "description": "認証したキーの所有者・権限・環境。",
+            "description": "認証したキーの所有者・権限・環境と、販売可否（sales）。",
             "content": {
               "application/json": {
                 "schema": {

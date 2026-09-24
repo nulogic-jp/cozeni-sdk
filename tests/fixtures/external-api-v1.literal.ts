@@ -11,6 +11,24 @@ export const fixture = {
     ],
     environment: "development",
     api_version: "v1",
+    sales: {
+      can_sell: false,
+      blockers: [
+        {
+          code: "review_rejected",
+          action_url: "https://app.cozeni.net/settings/onboarding",
+          rejection: {
+            reason_code: "tokushoho_missing_contact",
+            note: "特定商取引法の連絡先を確認できませんでした",
+          },
+        },
+        {
+          code: "stripe_onboarding_incomplete",
+          action_url: "https://app.cozeni.net/settings/onboarding",
+        },
+      ],
+      warnings: [],
+    },
   },
   create_product: {
     name: "配色ハンドブック",
