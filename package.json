@@ -1,6 +1,6 @@
 {
   "name": "@nulogic/cozeni-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cozeni外部API用のサーバー向けJavaScript SDK",
   "license": "MIT",
   "repository": {
@@ -20,6 +20,22 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js",
+      "default": "./dist/next.js"
+    }
+  },
+  "dependencies": {
+    "server-only": "^0.0.1"
+  },
+  "peerDependencies": {
+    "next": ">=15.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
     }
   },
   "files": [
@@ -42,11 +58,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "typecheck:root": "tsc --noEmit -p tsconfig.root.json",
     "test": "vitest run && node --test skills/cozeni-setup/scripts/setup.test.mjs examples/javascript-server/web-handler.test.mjs",
     "lint": "biome check src tests examples/nextjs examples/javascript-server skills/cozeni-setup/scripts scripts vitest.config.ts",
     "format": "biome check --write src tests examples/nextjs examples/javascript-server skills scripts vitest.config.ts",
     "format:check": "biome format src tests examples/nextjs examples/javascript-server skills scripts vitest.config.ts",
-    "check": "bun run lint && bun run typecheck && bun run build && bun run test && bun run test:package && bun run test:repository && bun run test:example",
+    "check": "bun run lint && bun run typecheck && bun run typecheck:root && bun run build && bun run test && bun run test:package && bun run test:repository && bun run test:example && bun run test:next-runtime",
     "prepack": "bun run build",
     "test:package": "node scripts/verify-package.mjs",
     "test:next-runtime": "node scripts/verify-next-runtime.mjs",
@@ -57,6 +74,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
     "@types/node": "^24.3.1",
+    "next": "^15.5.4",
     "typescript": "^5.9.2",
     "vitest": "5.0.0"
   }

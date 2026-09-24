@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   emailPattern,
   forbiddenContent,
@@ -21,6 +21,8 @@ const temporary = await mkdtemp(join(tmpdir(), "cozeni-package-check-"));
 const requiredFiles = [
   "dist/index.js",
   "dist/index.d.ts",
+  "dist/next.js",
+  "dist/next.d.ts",
   "README.md",
   "LICENSE",
   "skills/cozeni-setup/SKILL.md",
@@ -144,6 +146,30 @@ try {
     const content = await readFile(extracted);
     // バイナリはNULを含むものとして除外し、tarball内の全文字ファイルを監査する。
     if (!content.includes(0)) assertSafeText(path, content.toString("utf8"));
+  }
+
+  // root export（"."）は素のNode ESM importだけで動く契約（"next/headers"等の
+  // Next.js固有依存を持たない）。サブパスexport（"./next"）はNext.jsのバンドラ
+  // 経由専用でこの検査の対象外（README参照）。
+  const distIndexUrl = pathToFileURL(
+    join(temporary, "package", "dist/index.js"),
+  ).href;
+  const loaded = await import(distIndexUrl);
+  for (const name of [
+    "createManagementClient",
+    "createCustomerClient",
+    "CozeniError",
+    "trustedSiteUrl",
+    "customerCookie",
+    "clearCustomerCookie",
+    "enterRedirectUrl",
+    "enterRedirectResponse",
+  ]) {
+    assert.equal(
+      typeof loaded[name],
+      "function",
+      `root exportを素のNode ESMでimportしたときに${name}が見つかりません。`,
+    );
   }
 
   console.log(

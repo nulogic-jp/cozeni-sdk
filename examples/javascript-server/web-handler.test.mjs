@@ -88,9 +88,93 @@ test("handoff codeを交換し、HttpOnly Cookie設定後にコードなしURL�
 
   assert.equal(code, "one-time-code");
   assert.equal(response.status, 303);
-  assert.equal(response.headers.get("Location"), "https://site.example.com/members");
+  assert.equal(
+    response.headers.get("Location"),
+    "https://site.example.com/members?cozeni_handoff=1",
+  );
   assert.match(response.headers.get("Set-Cookie"), /HttpOnly/);
   assert.doesNotMatch(response.headers.get("Location"), /cozeni_code/);
+});
+
+test("ハンドオフ成功直後の印が付いたリクエストで拒否された場合、enter_urlへ再リダイレクトしない", async () => {
+  const handle = handler({
+    checkEntitlement: async () => ({
+      entitled: false,
+      reason: "no_grant",
+      enterUrl: "https://checkout.example.com/enter?product_id=prod_example",
+    }),
+  });
+  const response = await handle(
+    new Request("https://site.example.com/members?cozeni_handoff=1"),
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.has("Location"), false);
+});
+
+test("ハンドオフ成功直後の印が付いたリクエストで許可された場合、印を外したURLへ正規化する", async () => {
+  const handle = handler({
+    checkEntitlement: async () => ({ entitled: true }),
+  });
+  const response = await handle(
+    new Request("https://site.example.com/members?cozeni_handoff=1"),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("Location"),
+    "https://site.example.com/members",
+  );
+});
+
+test("cozeni_errorだけが付いた状態で許可された場合も、印を外したURLへ正規化する", async () => {
+  const handle = handler({
+    checkEntitlement: async () => ({ entitled: true }),
+  });
+  const response = await handle(
+    new Request("https://site.example.com/members?cozeni_error=invalid_code"),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("Location"),
+    "https://site.example.com/members",
+  );
+});
+
+test("交換失敗直後(cozeni_error)の拒否もenter_urlへ再リダイレクトしない", async () => {
+  const handle = handler({
+    checkEntitlement: async () => ({
+      entitled: false,
+      reason: "no_session",
+      enterUrl: "https://checkout.example.com/enter?product_id=prod_example",
+    }),
+  });
+  const response = await handle(
+    new Request("https://site.example.com/members?cozeni_error=unavailable"),
+  );
+
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.has("Location"), false);
+});
+
+test("通常の拒否ではenter_urlへ1回だけリダイレクトする", async () => {
+  const handle = handler({
+    checkEntitlement: async () => ({
+      entitled: false,
+      reason: "no_grant",
+      enterUrl: "https://checkout.example.com/enter?product_id=prod_example",
+    }),
+  });
+  const response = await handle(
+    new Request("https://site.example.com/members"),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("Location"),
+    "https://checkout.example.com/enter?product_id=prod_example",
+  );
 });
 
 test("空または重複したhandoff codeをURLから除去する", async () => {
@@ -140,5 +224,8 @@ test("Node HTTP接続でもHostヘッダーをredirect先へ利用しない", as
   const response = await completed;
 
   assert.equal(response.status, 303);
-  assert.equal(response.headers.location, "https://site.example.com/members");
+  assert.equal(
+    response.headers.location,
+    "https://site.example.com/members?cozeni_handoff=1",
+  );
 });

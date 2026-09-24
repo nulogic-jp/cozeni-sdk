@@ -71,8 +71,13 @@ export type Entitlement =
   | { entitled: true }
   | {
       entitled: false;
-      reason: "no_grant" | "revoked" | "no_session" | "unavailable";
-    };
+      reason: "no_grant" | "revoked" | "no_session";
+      // 購入者を再入場させる画面へのURL。validEnterUrl()の構造検証を通過した
+      // ときだけ含む。手で組み立てたEntitlementを渡す場合も、enterRedirectUrl()が
+      // 同じ検証を再度行うため、ここに不正な値が入っていても実害はない。
+      enterUrl?: string;
+    }
+  | { entitled: false; reason: "unavailable" };
 export interface ClientOptions {
   apiOrigin: string;
   fetch?: typeof globalThis.fetch;
@@ -87,6 +92,7 @@ const knownCodes = new Set([
   "invalid_code",
   "unauthorized",
   "insufficient_scope",
+  "terms_consent_required",
   "product_not_found",
   "checkout_link_not_found",
   "idempotency_conflict",
@@ -144,6 +150,41 @@ function origin(value: string): URL {
 }
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+/**
+ * enter_url の構造検証。API応答の取り込み時（checkEntitlement）と
+ * enterRedirectUrl()（手で組み立てたEntitlementを渡す経路）の両方で必ず通す
+ * 共通関数。SDKの設定にweb originを足さない方針のため、許可originの列挙ではなく
+ * 構造で縛る。
+ *
+ * - httpsが必須。httpはlocalhost・127.0.0.1・[::1]のloopbackだけ許可（開発用）
+ * - userinfo（ユーザー名・パスワード）を含まない
+ * - pathnameは"/enter"固定
+ * - クエリは"product_id"の1個だけで、値は問い合わせたproductIdと完全一致する
+ * - fragmentを含まない
+ *
+ * いずれかに反する場合はundefined（採用しない＝リダイレクトしない）。
+ */
+function validEnterUrl(value: unknown, productId: string): URL | undefined {
+  if (typeof value !== "string") return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/enter" ||
+    url.hash ||
+    [...url.searchParams.keys()].length !== 1 ||
+    url.searchParams.get("product_id") !== productId
+  )
+    return undefined;
+  return url;
 }
 function transport(options: ClientOptions, apiKey?: string) {
   serverOnly();
@@ -305,15 +346,19 @@ export function createCustomerClient(options: ClientOptions) {
       productId: string;
       cookieHeader?: string;
     }): Promise<Entitlement> {
+      // 未認証（Cookie無し）もこのAPIの主要な入口のため、トークン無しでも呼び出す。
+      // productIdが空、または契約の上限（200文字）を超える入力は、API障害
+      // （unavailable）とは区別できる設定ミスのため、API呼び出し前にno_grant
+      // （契約上「未購入または商品不明」を表す）として拒否する。
+      if (!input.productId || input.productId.length > 200)
+        return { entitled: false, reason: "no_grant" };
       const token = customerToken(input.cookieHeader);
-      if (!token) return { entitled: false, reason: "no_session" };
       try {
-        if (!input.productId) return { entitled: false, reason: "unavailable" };
         const { response, data } = await send(
           "/customer/entitlements/check",
           "POST",
           { product_id: input.productId },
-          { Cookie: `cozeni_customer=${token}` },
+          token ? { Cookie: `cozeni_customer=${token}` } : undefined,
         );
         if (record(data)) {
           if (response.status === 200 && data.entitled === true)
@@ -322,14 +367,30 @@ export function createCustomerClient(options: ClientOptions) {
             response.status === 200 &&
             data.entitled === false &&
             (data.reason === "no_grant" || data.reason === "revoked")
-          )
-            return { entitled: false, reason: data.reason };
+          ) {
+            const enterUrl = validEnterUrl(data.enter_url, input.productId);
+            return enterUrl
+              ? {
+                  entitled: false,
+                  reason: data.reason,
+                  enterUrl: enterUrl.href,
+                }
+              : { entitled: false, reason: data.reason };
+          }
           if (
             response.status === 401 &&
             data.entitled === false &&
             data.reason === "no_session"
-          )
-            return { entitled: false, reason: "no_session" };
+          ) {
+            const enterUrl = validEnterUrl(data.enter_url, input.productId);
+            return enterUrl
+              ? {
+                  entitled: false,
+                  reason: "no_session",
+                  enterUrl: enterUrl.href,
+                }
+              : { entitled: false, reason: "no_session" };
+          }
         }
         return { entitled: false, reason: "unavailable" };
       } catch {
@@ -352,4 +413,42 @@ export function customerCookie(token: string, siteOrigin: string): string {
 }
 export function clearCustomerCookie(siteOrigin: string): string {
   return `cozeni_customer=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${origin(siteOrigin).protocol === "https:" ? "; Secure" : ""}`;
+}
+/**
+ * 拒否結果から自動遷移すべきenter_urlを取り出す。許可・unavailable・enter_url無しは
+ * undefined。フレームワークに依存しない共通ヘルパーで、Next.js等の実際のredirectは
+ * 呼び出し側（サブパスexport等）が行う。
+ *
+ * `entitlement.enterUrl`は手で組み立てられる可能性があるため、checkEntitlement内部と
+ * 同じvalidEnterUrl()で構造（https・userinfo無し・pathname固定・product_id一致・
+ * fragment無し）を再検証する。第2引数のproductIdは、この結果を表示・利用する
+ * ページ・APIが実際に問い合わせたproductIdを渡すこと（呼び出し側が別の商品IDの
+ * enter_urlを誤って採用しないようにするため）。
+ */
+export function enterRedirectUrl(
+  entitlement: Entitlement,
+  productId: string,
+): URL | undefined {
+  if (entitlement.entitled || entitlement.reason === "unavailable")
+    return undefined;
+  return validEnterUrl(entitlement.enterUrl, productId);
+}
+/**
+ * Web標準Responseでenter_urlへ303遷移する。enter_urlが無い・検証に通らない場合は
+ * undefined（呼び出し側でサイト内の拒否表示にフォールバックする）。
+ */
+export function enterRedirectResponse(
+  entitlement: Entitlement,
+  productId: string,
+): Response | undefined {
+  const target = enterRedirectUrl(entitlement, productId);
+  if (!target) return undefined;
+  return new Response(null, {
+    status: 303,
+    headers: {
+      Location: target.href,
+      "Cache-Control": "private, no-store",
+      "Referrer-Policy": "no-referrer",
+    },
+  });
 }
