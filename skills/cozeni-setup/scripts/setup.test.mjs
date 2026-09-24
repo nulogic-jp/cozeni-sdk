@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import fs, { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs, {
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { inspectProducts, setupProduct } from "./setup.mjs";
 
 const config = {
@@ -317,4 +324,31 @@ test("Next設定CLIは既知の停止コードを示し、未知例外と入力�
   assert.ok(!result.stderr.includes(statePath));
   await rm(statePath);
   assert.ok(!invoke().stderr.includes(statePath));
+});
+
+test("bun・pnpmと同じsymlink経由の実行でもCLIが無出力で終わらない", async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), "cozeni-setup-link-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  // node_modules/@nulogic/cozeni-sdkが実体へのsymlinkになる配置を再現する。
+  const linked = join(temporary, "scripts");
+  await symlink(dirname(fileURLToPath(import.meta.url)), linked, "dir");
+  const { COZENI_API_KEY: _, ...env } = process.env;
+  for (const flags of [[], ["--preserve-symlinks-main"]]) {
+    const setup = spawnSync(
+      process.execPath,
+      [...flags, join(linked, "setup.mjs"), "inspect", "config.json"],
+      { encoding: "utf8", env },
+    );
+    assert.equal(setup.status, 1);
+    assert.ok(setup.stderr.includes("(manual_server_key_required)"));
+    const configure = spawnSync(
+      process.execPath,
+      [...flags, join(linked, "configure-next.mjs")],
+      { encoding: "utf8", env },
+    );
+    assert.equal(configure.status, 1);
+    assert.ok(
+      configure.stderr.includes("状態ファイルのパスを指定してください"),
+    );
+  }
 });

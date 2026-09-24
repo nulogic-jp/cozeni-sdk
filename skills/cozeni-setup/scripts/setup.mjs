@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scopes = [
   "products:read",
@@ -271,10 +272,20 @@ async function main() {
         });
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
+// bun・pnpmはpackageをsymlink経由で配置し、Nodeは既定でmoduleの実パスを、
+// --preserve-symlinks-main指定時はsymlinkのパスをimport.meta.urlにする。
+// どの配置・指定でも一致するよう、実行パスとmoduleパスの両方を実パスで比べる。
+export function isEntrypoint(moduleUrl) {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(fileURLToPath(moduleUrl)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+}
+if (isEntrypoint(import.meta.url)) {
   main().catch((error) => {
     // API本文、URL、入力、スタックには秘密が混入しうるため出力しない。
     const allowed = new Set([
