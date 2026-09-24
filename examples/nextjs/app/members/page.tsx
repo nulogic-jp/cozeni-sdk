@@ -1,17 +1,15 @@
 import { redirect } from "next/navigation";
 import {
   AccessDenied,
-  entitlement,
-  otpUrl,
   protectedData,
   reportServerError,
+  requireEntitlement,
   siteUrl,
 } from "../../lib/cozeni";
 import { submitProtectedAction } from "./actions";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 function Denied({ reason }: { reason: string }) {
-  const reentryUrl = reason === "no_session" ? otpUrl() : undefined;
   return (
     <main>
       <h1>コンテンツを表示できません</h1>
@@ -27,13 +25,6 @@ function Denied({ reason }: { reason: string }) {
       <p>
         <a href="/members">再試行</a>
       </p>
-      {reason === "no_session" ? (
-        reentryUrl ? (
-          <a href={reentryUrl}>メール認証で再入場</a>
-        ) : (
-          <p>再入場の設定を確認中です。サイト運営者へお問い合わせください。</p>
-        )
-      ) : null}
       <form action="/cozeni/clear" method="post">
         <button type="submit">購入者Cookieを消去</button>
       </form>
@@ -46,27 +37,55 @@ export default async function Members({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const query = await searchParams;
-  if (typeof query.cozeni_code === "string") {
-    let callback: URL;
+  // 重複クエリ（string[]）はJavaScript例（web-handler.mjs）と同じ扱いで、
+  // 単一の非空文字列でなければ無効なコードとして扱う。
+  const codeValue = query.cozeni_code;
+  if (codeValue !== undefined) {
+    const valid = typeof codeValue === "string" && codeValue.length > 0;
+    let target: URL;
     try {
-      callback = siteUrl("/cozeni/handoff");
+      target = siteUrl(valid ? "/cozeni/handoff" : "/members");
     } catch (error) {
       reportServerError(error, "購入者ページのコード転送");
       return <Denied reason="unavailable" />;
     }
-    callback.searchParams.set("cozeni_code", query.cozeni_code);
-    redirect(callback.href);
+    if (valid) target.searchParams.set("cozeni_code", codeValue);
+    else target.searchParams.set("cozeni_error", "invalid_code");
+    redirect(target.href);
   }
-  // 交換失敗だけで既存セッションを無効扱いせず、必ず現在の権利を確認する。
-  const result = await entitlement();
-  if (!result.entitled) {
+  // ハンドオフ直後（cozeni_codeを処理した直後のハンドオフ成功で付く
+  // cozeni_handoff、または交換失敗で付くcozeni_error）は、重複クエリで
+  // string[]になっていても「印がある」とみなし、enter_urlがあっても
+  // 再リダイレクトせずここで留める（無限リダイレクトの回避）。
+  const haltRedirect =
+    query.cozeni_error !== undefined || query.cozeni_handoff !== undefined;
+  const cozeniError =
+    typeof query.cozeni_error === "string" ? query.cozeni_error : undefined;
+  try {
+    await requireEntitlement(haltRedirect);
+  } catch (error) {
+    // requireEntitlement()はenter_urlがあればredirect()の制御フロー例外を投げる。
+    // AccessDenied以外はここで握りつぶさず、そのまま上位へ伝播させる。
+    if (!(error instanceof AccessDenied)) throw error;
+    reportServerError(error, "購入者ページ");
     const reason =
-      result.reason === "no_session" && query.cozeni_error === "unavailable"
+      error.reason === "no_session" && cozeniError === "unavailable"
         ? "unavailable"
-        : result.reason;
+        : error.reason;
     return <Denied reason={reason} />;
   }
-  // pageの認可後に権利が失効しても、データ層でもう一度拒否する。
+  // ここに到達したら権利がある。ハンドオフ成功直後・交換失敗の印が付いていれば、
+  // 両方を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
+  if (haltRedirect) {
+    let target: URL | undefined;
+    try {
+      target = siteUrl("/members");
+    } catch (error) {
+      reportServerError(error, "購入者ページの正規化");
+    }
+    if (target) redirect(target.href);
+  }
+  // pageの認可後に権利が失効しても、データ層でもう一度拒否する（redirectはしない）。
   try {
     const data = await protectedData();
     return (

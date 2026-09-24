@@ -71,10 +71,25 @@ const result = await customer.checkEntitlement({
 
 if (!result.entitled) {
   // no_session / no_grant / revoked / unavailable に応じて拒否する
+  // no_session / no_grant / revoked には、result.enterUrl（メールアドレス
+  // 入力画面への絶対URL）が付くことがあります。
 }
 ```
 
-`cozeni_customer` Cookieだけを読み、既存の認証CookieはCozeniへ転送しません。未認証・無効応答・通信障害・タイムアウトのいずれでも許可せず、`unavailable`（Cozeni側の障害）を購入要求へ変換しないでください。
+`cozeni_customer` Cookieだけを読み、既存の認証CookieはCozeniへ転送しません。未認証・無効応答・通信障害・タイムアウトのいずれでも許可せず、`unavailable`（Cozeni側の障害）を購入要求へ変換しないでください。**`unavailable`には`enterUrl`が付きません**（障害を再認証要求に変換しないため）。
+
+`enterUrl`はAPI応答をそのまま信頼するのではなく、SDKが構造で検証してから採用します（httpsが必須、httpはlocalhost・127.0.0.1・[::1]のloopbackだけ許可、userinfo無し、pathnameは`/enter`固定、クエリは問い合わせた`productId`と一致する`product_id`の1個だけ、fragment無し）。SDKの設定にweb originを足さない方針のため、許可originの列挙ではなく構造で縛っています。APIオリジン自体は、TLS（HTTPS）で取得した応答を信頼する前提です。合わない値は省略されます（リダイレクトしません）。
+
+拒否結果からリダイレクト先を組み立てるフレームワーク非依存のヘルパーもあります。第2引数には、この結果を問い合わせた`productId`を渡してください（`enterUrl`が実際にその商品を指しているかを再検証するため）。
+
+```ts
+import {enterRedirectUrl, enterRedirectResponse} from '@nulogic/cozeni-sdk';
+
+const target = enterRedirectUrl(result, productId); // URL | undefined
+const response = enterRedirectResponse(result, productId); // Web標準Response(303) | undefined
+```
+
+`enterRedirectResponse` はHTMLを返すページ入口向けです。JSON APIを返す入口では使わず、`enter_url` はJSON本文へ含めるだけにしてリダイレクトしないでください（fetchの呼び出し元をHTMLへ飛ばさないため）。無限リダイレクトを避けるため、ハンドオフのコード交換直後（`cozeni_code`を処理した直後のリクエスト、成功直後のマーカー付きリクエスト、または交換失敗で`cozeni_error`が付いたリクエスト）では、`enter_url`があっても再リダイレクトせず拒否画面に留めてください。
 
 `exchangeHandoff(code)` は60秒・単回のコードを `{token}` へ交換します。結果は `customerCookie` で自サイトのHttpOnly Cookieへ保存します。信頼originはサーバー設定から指定し、Hostヘッダーから組み立てません。
 
@@ -90,11 +105,28 @@ if (!result.entitled) {
 
 [`examples/nextjs`](examples/nextjs) は買い切り1商品・`/members` 1ページの実装例です。各境界で独立に認可します。
 
+`@nulogic/cozeni-sdk/next`（Next.js専用のサブパスexport。`next`をpeerDependencyとして要求、任意）が、`cookies()`の読み取りから`enter_url`への自動リダイレクトまでを行います。**このサブパスはNext.jsのバンドラ（webpack/turbopack）を通してのみ動作します。** `next`本体がpackage.jsonに`exports`を持たないため、`next/headers` / `next/navigation`を素のNode ESM importで解決できません。root export（`@nulogic/cozeni-sdk`本体）は素のNode ESMだけで動作し、この制約を持ちません。
+
+```ts
+import {requireEntitlement} from '@nulogic/cozeni-sdk/next';
+
+export default async function Page() {
+  // 権利があれば何もしない。無ければenter_urlへredirect()するか、
+  // AccessDeniedを投げるので呼び出し側でサイト内の拒否表示を出す。
+  await requireEntitlement({apiOrigin, productId});
+  // ...保護コンテンツ
+}
+```
+
+**リダイレクトするのはpageの入口だけです。** `requireEntitlement()`はpage専用で、next/navigationの`redirect()`（制御フロー例外）を投げることがあります。呼び出しは`AccessDenied`だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。無限リダイレクトを避けるため、ハンドオフのコード交換直後（`cozeni_code`処理直後・成功直後のマーカー付き・`cozeni_error`付き）は`haltRedirect: true`を渡します。
+
+Server ActionとRoute Handlerではリダイレクトしません。**Route Handler（JSON API）**は`nextEntitlement()`の結果を`denialResponse(entitlement, productId)`（Web Response）へ渡し、401/403/503のJSONへ`enter_url`を含めます（`productId`はenter_url採用の再検証に使うため、実際に問い合わせたIDを渡してください）。**Server Action**はWeb Responseを返すべきではないため`denialResponse()`を使わず、`nextEntitlement()`の結果（または`AccessDenied.reason`）をそのままplain objectとして返し、呼び出し元のクライアントコンポーネントで表示を切り替えます。詳細は [`examples/nextjs/lib/cozeni.ts`](examples/nextjs/lib/cozeni.ts) と [`examples/nextjs/app/members/actions.ts`](examples/nextjs/app/members/actions.ts) を参照してください。
+
 | 境界 | 実装 |
 |---|---|
-| ページ / HTML / RSC | `app/members/page.tsx` |
-| 保護データ取得 | `lib/cozeni.ts` の `protectedData` |
-| Route Handler | `/api/protected`（401 / 403 / 503を区別） |
+| ページ / HTML / RSC | `app/members/page.tsx`（`requireEntitlement`でenter_urlへ自動リダイレクト） |
+| 保護データ取得 | `lib/cozeni.ts` の `protectedData`（redirectしない） |
+| Route Handler | `/api/protected`（401 / 403 / 503とenter_urlをJSONで返す） |
 | Server Action | `protectedAction` |
 | ハンドオフ | `/cozeni/handoff` |
 | Cookie消去 | `POST /cozeni/clear` |
@@ -109,10 +141,8 @@ if (!result.entitled) {
 bun install --frozen-lockfile
 bun run setup:hooks
 bun run check
-
-# 導入例は公開npmのSDKを参照する
-cd examples/nextjs && bun install && bun run build && cd ../..
-bun run test:next-runtime
 ```
 
 開発用フックは `bun run setup:hooks` で `core.hooksPath` を `.githooks` に設定します。以後コミット前に `format:check` / `lint` / `typecheck` / `test` が走ります。整形とlintの自動修正は `bun run format`、迂回は `git commit --no-verify` です。[CI](.github/workflows/ci.yml) はmainへのpushとpull requestでSDKと導入例のビルドを検証します。
+
+`bun run test:next-runtime` は `check` に含みます（`check` では直前に `build` が走ります）。現在の `dist` をnpm packしたtarball（`scripts/example-consumer.mjs`）で一時consumerを作り、そこで`bun install` / `next build` / `next start`まで行います。単独で実行するときは、先に `bun run build` を実行してください（packは `--ignore-scripts` のため、古い `dist` のまま検証してしまいます）。ローカルのCozeni API互換モックを起動し、実際に起動した本番相当サーバーへHTTPで到達して、外部enter_urlへのリダイレクト、ハンドオフ成功直後の停止条件と正規化、Route Handlerが実際にリダイレクトしないことを確認します（所要時間は概ね20秒未満）。Server Actionの非リダイレクト・plain object返却はNext.jsのAction ID解決が実HTTPでは複雑なため、vitestのユニットテスト（`examples/nextjs/tests/security.test.ts`）側で検証します。

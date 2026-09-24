@@ -90,6 +90,10 @@
               "reason": {
                 "type": "string",
                 "enum": ["no_grant", "revoked"]
+              },
+              "enter_url": {
+                "type": "string",
+                "format": "uri"
               }
             },
             "required": ["entitled", "reason"]
@@ -106,6 +110,10 @@
           "reason": {
             "type": "string",
             "enum": ["no_session"]
+          },
+          "enter_url": {
+            "type": "string",
+            "format": "uri"
           }
         },
         "required": ["entitled", "reason"]
@@ -129,7 +137,8 @@
         "properties": {
           "product_id": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "required": ["product_id"],
@@ -444,7 +453,8 @@
         "security": [
           {
             "CustomerCookie": []
-          }
+          },
+          {}
         ],
         "summary": "購入者の商品アクセス権を判定する",
         "requestBody": {
@@ -459,7 +469,7 @@
         },
         "responses": {
           "200": {
-            "description": "許可、未購入または剥奪済み。",
+            "description": "許可、未購入または剥奪済み。拒否時はproduct_idの形式が正しければ enter_url（http(s)絶対URL）を含む。",
             "content": {
               "application/json": {
                 "schema": {
@@ -479,7 +489,7 @@
             }
           },
           "401": {
-            "description": "セッションがない・無効・期限切れ・epoch不一致。",
+            "description": "セッションがない・無効・期限切れ・epoch不一致。product_idの形式が正しければ enter_url（http(s)絶対URL）を含む。",
             "content": {
               "application/json": {
                 "schema": {
@@ -489,7 +499,7 @@
             }
           },
           "503": {
-            "description": "権利を確認できないため拒否。",
+            "description": "権利を確認できないため拒否。enter_urlは付けない（障害を再認証要求に変換しないため）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -542,7 +552,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -676,7 +686,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -810,7 +820,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -934,7 +944,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1066,7 +1076,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1190,7 +1200,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1322,7 +1332,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。",
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
             "content": {
               "application/json": {
                 "schema": {
