@@ -1,6 +1,6 @@
 ---
 name: cozeni-setup
-description: Cozeni SDK（@nulogic/cozeni-sdk）を使う作業全般で使う。既存のJavaScript / TypeScriptサイトへの導入と購入者認可の実装、商品の作成・更新とチェックアウトリンクの発行、販売・購入できない原因の確認（inspectの sales）などを扱う。Next.js App Routerとその他のサーバー構成を判定し、対応する実装資料を案内する。
+description: Cozeni SDK（@nulogic/cozeni-sdk）を使う作業全般で使う。既存のJavaScript / TypeScriptサイトへの導入と購入者認可の実装、商品の作成・更新とチェックアウトリンクの発行、販売を始められるか・購入できる状態か・審査やStripe接続の状況の確認、購入できない原因の調査（inspectの sales）などを扱う。Next.js App Routerとその他のサーバー構成を判定し、対応する実装資料を案内する。
 ---
 
 # Cozeni SDK
@@ -17,12 +17,12 @@ description: Cozeni SDK（@nulogic/cozeni-sdk）を使う作業全般で使う�
 
 既存の認証、middleware、ルーティングを置き換えず、判定した資料にある入口へ購入者認可を追加する。対象外のフレームワーク固有機能を推測して導入しない。
 
-## 導入後に「購入できない」と相談されたら
+## 販売できる状態か確認するとき
 
-まず商品登録helper（`scripts/setup.mjs`）の `inspect` コマンドを実行し、出力の `sales` を確認する。呼び出し方法（設定ファイルの場所やAPIキーの受け渡し）は導入プロンプトに従う。原因を推測で答えない。
+「購入できない」「もう売れる？」「審査は通った？」「Stripeの接続は終わっている？」など、販売可否・審査・Stripe接続の状況を聞かれたら、まず商品登録helper（`scripts/setup.mjs`）の `inspect` コマンドを実行し、出力の `sales` を確認する。呼び出し方法（設定ファイルの場所やAPIキーの受け渡し）は導入プロンプトに従う。原因を推測で答えない。
 
 - `sales` が `null`: 使用中のCozeni APIが `sales` に対応していない旧バージョンである。「Cozeni API側が古く、販売可否を取得できません」と伝え、原因を推測しない。
-- `sales.can_sell` が `true` なのに購入できない: アカウントではなく商品単位の問題を疑う。`inspect` の `products` で対象商品の `status` を確認し、チェックアウトリンクが無効になっていないかはCozeniの管理画面で確認するよう利用者へ伝える。APIキーを使うコードを書いて調べない。
+- `sales.can_sell` が `true`: アカウントとしては販売できる状態だと伝える。それでも購入できない場合は、アカウントではなく商品単位の問題を疑う。`inspect` の `products` で対象商品の `status` を確認し、チェックアウトリンクが無効になっていないかはCozeniの管理画面で確認するよう利用者へ伝える。APIキーを使うコードを書いて調べない。
 - `sales.can_sell` が `false`: `sales.blockers` の各項目を利用者へそのまま伝える。項目ごとの意味と利用者がすべき対応は次の表の通り。
 - `sales.warnings` に `payouts_disabled` が含まれる場合: 販売はできるが入金が停止している旨を追加で伝える。
 
