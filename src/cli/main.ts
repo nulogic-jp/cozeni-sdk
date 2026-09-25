@@ -25,6 +25,36 @@ function openBrowser(url: string) {
   }
 }
 
+/**
+ * init の package manager を実行する。引数は固定の値だけで、利用者の入力を含まない。
+ * 出力はトークン等を含みうるため、表示もせず受け取りもしない。
+ */
+function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string | undefined>,
+): Promise<{ code: number | null; error?: string }> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(command, args, {
+        cwd,
+        // Cozeni の変数を外した環境（init.ts の childEnvironment）。
+        env,
+        stdio: "ignore",
+        // Windowsの npm・pnpm・yarn は .cmd のため、シェル経由で起動する。
+        shell: process.platform === "win32",
+      });
+      child.on("error", (error: NodeJS.ErrnoException) =>
+        resolve({ code: null, error: error.code ?? "spawn_failed" }),
+      );
+      child.on("close", (code) => resolve({ code }));
+    } catch {
+      resolve({ code: null, error: "spawn_failed" });
+    }
+  });
+}
+
 let lines: ReturnType<typeof createInterface> | undefined;
 function input() {
   lines ??= createInterface({ input: process.stdin });
@@ -52,6 +82,7 @@ const code = await run({
     reader.on("line", listener);
     return () => reader.off("line", listener);
   },
+  runCommand,
 });
 lines?.close();
 process.exitCode = code;

@@ -97,6 +97,9 @@ function cli(
       lineListeners.push(listener);
       return () => {};
     },
+    runCommand: async () => {
+      throw new Error("このテストでは子プロセスを起動しない");
+    },
   });
   return {
     state,
@@ -611,8 +614,9 @@ describe("products", () => {
       if (key === "PATCH /products/prd_1")
         return json({ ...product, ...(call.body as object) });
       if (key === "PUT /products/prd_1/checkout-link") return json(link);
+      // 既定では商品が無い（作成の前の重複確認に掛からない）。
       if (key.startsWith("GET /products"))
-        return json({ items: [product], next_cursor: null });
+        return json({ items: [], next_cursor: null });
       return json({}, 404);
     };
   const createArgs = [
@@ -750,6 +754,84 @@ describe("products", () => {
       .map((call) => call.headers.get("Idempotency-Key"));
     expect(keys[0]).toBe(keys[1]);
   });
+  const existing = {
+    "GET /products?limit=100": () =>
+      json({ items: [product], next_cursor: null }),
+  };
+  it("同じ名前・価格・access_urlの有効な商品があれば、確認なしで作らずにそれを返す", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        ...existing,
+        "GET /products/prd_1/checkout-link": () => json(link),
+      }),
+    );
+    expect((await t.run(...createArgs, "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      product: { id: "prd_1" },
+      checkout_link: { url: link.url },
+      reused: true,
+      reason: "same_product_exists",
+      next_step: null,
+    });
+    expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+  it("既存の商品の購入リンクが未発行なら発行せず、linkを案内する", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        ...existing,
+        "GET /products/prd_1/checkout-link": () =>
+          apiError("checkout_link_not_found", 404),
+      }),
+    );
+    expect((await t.run(...createArgs, "--yes", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      checkout_link: null,
+      reused: true,
+      next_step: "npx @nulogic/cozeni-sdk link prd_1",
+    });
+    expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+  it("アーカイブ済みや内容の違う商品は重複とみなさない", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        "GET /products?limit=100": () =>
+          json({
+            items: [
+              { ...product, id: "prd_a", status: "archived" },
+              { ...product, id: "prd_b", price_jpy: 2000 },
+              { ...product, id: "prd_c", access_url: "https://site.example/x" },
+            ],
+            next_cursor: null,
+          }),
+      }),
+    );
+    expect((await t.run(...createArgs, "--yes", "--json")).code).toBe(0);
+    expect(t.calls.some((call) => call.method === "POST")).toBe(true);
+    expect(t.parsed().data.reused).toBe(false);
+  });
+  it("--allow-duplicateなら同じ内容でも新しく作り、作成済みの冪等キーを使い回さない", async () => {
+    await saveLogin();
+    const t = cli(server());
+    await t.run(...createArgs, "--yes", "--json");
+    const second = cli(server(existing));
+    expect(
+      (await second.run(...createArgs, "--allow-duplicate", "--json")).code,
+    ).toBe(2);
+    expect(second.parsed().error.code).toBe("confirmation_required");
+    expect(
+      (await second.run(...createArgs, "--allow-duplicate", "--yes", "--json"))
+        .code,
+    ).toBe(0);
+    expect(second.parsed().data.reused).toBe(false);
+    const keys = [...t.calls, ...second.calls]
+      .filter((call) => call.method === "POST")
+      .map((call) => call.headers.get("Idempotency-Key"));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
   it("TTYでは確認を求め、承諾したときだけ作成する", async () => {
     await saveLogin();
     const declined = cli(server(), { tty: true, answer: "n" });
@@ -846,6 +928,7 @@ describe("products", () => {
         url: link.url,
         disabled: false,
       },
+      next_step: null,
     });
     expect(t.calls.some((call) => call.method === "PUT")).toBe(false);
   });
@@ -861,7 +944,10 @@ describe("products", () => {
     expect(human.code).toBe(0);
     expect(human.out).toContain("購入リンク: 未発行");
     expect((await t.run("products", "get", "prd_1", "--json")).code).toBe(0);
-    expect(t.parsed().data.checkout_link).toBeNull();
+    expect(t.parsed().data).toMatchObject({
+      checkout_link: null,
+      next_step: "npx @nulogic/cozeni-sdk link prd_1",
+    });
   });
   it("getは存在しない商品をnot_foundで終了コード4にする", async () => {
     await saveLogin();
@@ -914,6 +1000,75 @@ describe("status", () => {
     });
     expect(data.warnings).toEqual([]);
   });
+  it("利用者にそのまま見せる次にやることを返す", async () => {
+    await saveLogin();
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json({
+            ...account,
+            sales: {
+              can_sell: false,
+              blockers: [
+                {
+                  code: "review_rejected",
+                  action_url: `${APP}/settings/review`,
+                  rejection: {
+                    reason_code: "other",
+                    note: "特商法の表記が不足",
+                  },
+                },
+                {
+                  code: "stripe_not_connected",
+                  action_url: `${APP}/settings/payouts`,
+                },
+              ],
+              warnings: [],
+            },
+          })
+        : json({ items: [], next_cursor: null }),
+    );
+    await t.run("status", "--json");
+    const data = t.parsed().data;
+    expect(data.message_for_user).toEqual([
+      "販売を始めるには、次の手続きが必要です。",
+      `1. 審査で差し戻されました。指摘を直して再申請してください（理由: 特商法の表記が不足）。 ${APP}/settings/review`,
+      `2. Stripeアカウントを接続してください。 ${APP}/settings/payouts`,
+    ]);
+    expect(data.next_step).toBe(
+      'npx @nulogic/cozeni-sdk products create --name "<商品名>" --price <円> --access-url "<URL>"',
+    );
+  });
+  it("販売できるなら「すぐ販売できます」と返す", async () => {
+    await saveLogin();
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json({
+            ...account,
+            sales: { can_sell: true, blockers: [], warnings: [] },
+          })
+        : json({ items: [product], next_cursor: null }),
+    );
+    const human = await t.run("status");
+    expect(human.out).toContain("すぐ販売できます");
+    await t.run("status", "--json");
+    expect(t.parsed().data).toMatchObject({
+      message_for_user: ["すぐ販売できます。"],
+      next_step: null,
+    });
+  });
+  it("販売状態が取れなければ、推測せず管理画面を案内する", async () => {
+    await saveLogin();
+    const { sales: _, ...legacy } = account;
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json(legacy)
+        : json({ items: [], next_cursor: null }),
+    );
+    await t.run("status", "--json");
+    expect(t.parsed().data.message_for_user).toEqual([
+      `販売できる状態かを確かめられませんでした。Cozeni の管理画面で確認してください。 ${APP}`,
+    ]);
+  });
   it("キーの期限まで7日を切ったらkey_expiringを返す", async () => {
     await saveLogin({ expires_at: "2026-09-30T00:00:00.000Z" });
     const t = cli((call) =>
@@ -960,6 +1115,201 @@ describe("使い方と版の照合", () => {
     const t = cli(() => json(account));
     const { code, err } = await t.run("whoami", "--json");
     expect(code).toBe(0);
-    expect(err).toContain("npx skills add nulogic-jp/cozeni-sdk");
+    expect(err).toContain("npx @nulogic/cozeni-sdk init");
+  });
+});
+
+async function saveConfig(
+  config: Parameters<ReturnType<typeof createStore>["saveConfig"]>[0],
+) {
+  await createStore({ XDG_CONFIG_HOME: home }).saveConfig(config);
+}
+const expected = (creator = "crt_1") => ({
+  version: 1 as const,
+  default_profile: "production",
+  profiles: {
+    production: { expected_creator_id: creator.replace(/^crt_/, "cre_") },
+  },
+});
+
+describe("既定のプロファイル", () => {
+  it("--profileを省略したらconfig.jsonのdefault_profileと、その接続先を使う", async () => {
+    await saveConfig({
+      version: 1,
+      default_profile: "staging",
+      profiles: {
+        staging: {
+          api_origin: "https://api.staging.example",
+          app_origin: "https://app.staging.example",
+        },
+      },
+    });
+    const t = cli(() => json(deviceCode));
+    await t.run("login", "--json");
+    expect(t.calls[0]?.path).toBe(
+      "https://api.staging.example/external/v1/cli/device-codes",
+    );
+    expect(t.calls).toHaveLength(1);
+  });
+  it("既定のプロファイルでは次のコマンドに--profileを付けない", async () => {
+    await saveConfig({
+      version: 1,
+      default_profile: "staging",
+      profiles: {
+        staging: {
+          api_origin: "https://api.staging.example",
+          app_origin: "https://app.staging.example",
+        },
+      },
+    });
+    const t = cli(() =>
+      json({
+        ...deviceCode,
+        verification_uri: "https://app.staging.example/device",
+        verification_uri_complete: undefined,
+      }),
+    );
+    expect((await t.run("login", "--json")).code).toBe(0);
+    expect(t.parsed().data.next_step).toBe(
+      "npx @nulogic/cozeni-sdk login --complete",
+    );
+  });
+  it("config.jsonが無ければproduction", async () => {
+    await saveLogin();
+    const t = cli(() => json(account));
+    await t.run("whoami", "--json");
+    expect(t.calls[0]?.path).toBe(`${API}/external/v1/account`);
+  });
+});
+
+describe("loginの冪等化とクリエイターの照合", () => {
+  const cre = { ...account, creator_id: "cre_1" };
+  const creToken = { ...token, creator_id: "cre_1" };
+  it("保存済みのキーが有効で期待するクリエイターなら、何もせず成功する", async () => {
+    await saveConfig(expected("cre_1"));
+    await saveLogin({ creator_id: "cre_1" });
+    const t = cli(() => json(cre));
+    expect((await t.run("login", "--json")).code).toBe(0);
+    expect(t.calls.map((call) => call.path)).toEqual([
+      `${API}/external/v1/account`,
+    ]);
+    expect(t.parsed().data).toMatchObject({
+      already_logged_in: true,
+      creator_id: "cre_1",
+      next_step: "npx @nulogic/cozeni-sdk status",
+    });
+  });
+  it.each([
+    [
+      "別のクリエイターのキー",
+      { creator_id: "cre_other" },
+      () => json({ ...cre, creator_id: "cre_other" }),
+    ],
+    [
+      "期限まで7日を切ったキー",
+      { creator_id: "cre_1", expires_at: "2026-09-30T00:00:00.000Z" },
+      () => json(cre),
+    ],
+    [
+      "失効したキー",
+      { creator_id: "cre_1" },
+      () => apiError("unauthorized", 401),
+    ],
+  ] as const)(
+    "%sなら新しくログインを始める",
+    async (_, saved, accountResponse) => {
+      await saveConfig(expected("cre_1"));
+      await saveLogin(saved);
+      const t = cli(({ path }) =>
+        path.endsWith("/account") ? accountResponse() : json(deviceCode),
+      );
+      expect((await t.run("login", "--json")).code).toBe(0);
+      expect(t.parsed().data.user_code).toBe("BCDF-GHJK");
+      expect(
+        t.calls.some((call) => call.path.endsWith("/cli/device-codes")),
+      ).toBe(true);
+    },
+  );
+  it("--completeで得たキーが期待と違えば保存せず失効させ、creator_mismatchで止める", async () => {
+    await saveConfig(expected("cre_1"));
+    const t = cli(({ path }) => {
+      if (path.endsWith("/cli/device-codes")) return json(deviceCode);
+      if (path.endsWith("/cli/tokens"))
+        return json({ ...creToken, creator_id: "cre_other" });
+      return new Response(null, { status: 204 });
+    });
+    await t.run("login", "--json");
+    const { code, out } = await t.run("login", "--complete", "--json");
+    expect(code).toBe(4);
+    const error = t.parsed().error;
+    expect(error.code).toBe("creator_mismatch");
+    expect(error.message).toContain("別のアカウント");
+    expect(error).toMatchObject({
+      expected_creator_id: "cre_1",
+      actual_creator_id: "cre_other",
+    });
+    expect(out).not.toContain(creToken.api_key);
+    const logout = t.calls.find((call) => call.path.endsWith("/cli/logout"));
+    expect(logout?.headers.get("Authorization")).toBe(
+      `Bearer ${creToken.api_key}`,
+    );
+    expect(
+      await createStore({ XDG_CONFIG_HOME: home }).loadCredential("production"),
+    ).toBeUndefined();
+    await expect(
+      lstat(join(home, "cozeni", "pending", "login-production.json")),
+    ).rejects.toThrow();
+  });
+  it("--completeで期待どおりなら保存し、次にstatusを案内する", async () => {
+    await saveConfig(expected("cre_1"));
+    const t = cli(({ path }) =>
+      path.endsWith("/cli/device-codes") ? json(deviceCode) : json(creToken),
+    );
+    await t.run("login", "--json");
+    expect((await t.run("login", "--complete", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      already_logged_in: false,
+      creator_id: "cre_1",
+      next_step: "npx @nulogic/cozeni-sdk status",
+    });
+  });
+  it("保存済みのキーのクリエイターが違えば、要求を送らずに止める", async () => {
+    await saveConfig(expected("cre_1"));
+    await saveLogin({ creator_id: "cre_other" });
+    const t = cli(() => json(cre));
+    const { code } = await t.run("link", "prd_1", "--json");
+    expect(code).toBe(4);
+    expect(t.parsed().error.code).toBe("creator_mismatch");
+    expect(t.calls).toHaveLength(0);
+  });
+  it("COZENI_API_KEYのクリエイターが違えば、GET /accountだけで止める", async () => {
+    await saveConfig(expected("cre_1"));
+    const t = cli(() => json({ ...cre, creator_id: "cre_other" }), {
+      env: { COZENI_API_KEY: "cozeni_env_secret" },
+    });
+    const { code } = await t.run(
+      "products",
+      "create",
+      "--name",
+      "x",
+      "--price",
+      "1000",
+      "--access-url",
+      "https://site.example/m",
+      "--yes",
+      "--json",
+    );
+    expect(code).toBe(4);
+    expect(t.parsed().error.code).toBe("creator_mismatch");
+    expect(t.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      `GET ${API}/external/v1/account`,
+    ]);
+  });
+  it("期待するクリエイターと一致すれば通常どおり動く", async () => {
+    await saveConfig(expected("cre_1"));
+    await saveLogin({ creator_id: "cre_1" });
+    const t = cli(() => json(cre));
+    expect((await t.run("whoami", "--json")).code).toBe(0);
+    expect(t.parsed().data.expected_creator_id).toBe("cre_1");
   });
 });

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -213,6 +220,40 @@ try {
   }
   assert.equal(loginRequired?.status, 3);
   assert.equal(JSON.parse(loginRequired.stdout).error.code, "login_required");
+
+  // init は配布物の中の skill を見つけてコピーできる。同じ版を入れ済みの
+  // プロジェクトにして、package manager を起動させない（通信しない）。
+  const site = join(temporary, "site");
+  const installed = join(site, "node_modules", "@nulogic", "cozeni-sdk");
+  await mkdir(join(site, ".git"), { recursive: true });
+  await mkdir(installed, { recursive: true });
+  await writeFile(
+    join(site, "package.json"),
+    JSON.stringify({
+      name: "site",
+      dependencies: { "@nulogic/cozeni-sdk": packed.version },
+    }),
+  );
+  await writeFile(
+    join(installed, "package.json"),
+    JSON.stringify({ name: "@nulogic/cozeni-sdk", version: packed.version }),
+  );
+  const initialized = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [cli, "init", "--creator", "cre_example", "--json"],
+      { cwd: site, env: cliEnvironment, encoding: "utf8" },
+    ),
+  );
+  assert.equal(initialized.ok, true);
+  assert.equal(initialized.data.sdk.installed, false);
+  assert.equal(
+    await readFile(join(site, ".agents/skills/cozeni-setup/SKILL.md"), "utf8"),
+    await readFile(
+      join(temporary, "package", "skills/cozeni-setup/SKILL.md"),
+      "utf8",
+    ),
+  );
 
   console.log(
     `配布検証成功: ${packed.name}@${packed.version} / ${files.length}ファイル / SDK・CLI・skill・examples / 内部情報・秘密なし`,

@@ -3,7 +3,7 @@
 // Next.js専用の`/next`は読み込まない（server-onlyとnext/*に依存するため）。
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { CLI, resolveProfile, session } from "./api.js";
+import { CLI, resolveProfile, session, verifyCreator } from "./api.js";
 import {
   type CommandContext,
   createProduct,
@@ -18,8 +18,10 @@ import {
 } from "./commands.js";
 import { isInteractive } from "./environment.js";
 import { CliError } from "./errors.js";
+import { init, type RunCommand } from "./init.js";
 import {
   completeLogin,
+  currentLogin,
   type LoginContext,
   logout,
   startLogin,
@@ -42,6 +44,8 @@ export interface CliContext {
   prompt(question: string): Promise<string>;
   /** 標準入力の行入力（Enter）を受ける。戻り値で購読をやめる。 */
   onLine(listener: () => void): () => void;
+  /** init で package manager を実行する。テストでは差し替える。 */
+  runCommand: RunCommand;
 }
 
 export const version: string = JSON.parse(
@@ -50,13 +54,21 @@ export const version: string = JSON.parse(
 
 const common = ["json", "profile", "api-origin", "app-origin", "help"];
 const commands: Record<string, string[]> = {
+  init: [...common, "creator"],
   login: [...common, "complete"],
   logout: common,
   whoami: common,
   status: common,
   "products list": common,
   "products get": common,
-  "products create": [...common, "yes", "name", "price", "access-url"],
+  "products create": [
+    ...common,
+    "yes",
+    "name",
+    "price",
+    "access-url",
+    "allow-duplicate",
+  ],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
 };
@@ -66,6 +78,9 @@ const help = `Cozeni CLI ${version}
 使い方: ${CLI} <コマンド> [オプション]
 
 コマンド:
+  init --creator <クリエイターID>
+                            導入の準備（SDKを依存に追加し、skillを置き、
+                            接続先と使うアカウントを覚える）
   login                     ログインを始める（承認用のURLとコードを表示）
   login --complete          承認を確かめてログインを終える
   logout                    ログインを終え、保存したキーを失効させる
@@ -74,7 +89,9 @@ const help = `Cozeni CLI ${version}
   products list             商品一覧
   products get <商品ID>     商品1件と購入リンクの状態を表示（リンクは発行しない）
   products create --name <名前> --price <円> --access-url <URL>
-                            商品を作成し、購入リンクを返す（確認が必要）
+                            商品を作成し、購入リンクを返す（確認が必要）。
+                            同じ内容の商品があれば作らずにそれを返す
+                            （それでも作るなら --allow-duplicate）
   products update <商品ID> [--name] [--price] [--access-url]
                             商品を変更（価格・URLの変更は確認が必要）
   link <商品ID>             購入リンクを取得（無ければ発行）
@@ -82,7 +99,8 @@ const help = `Cozeni CLI ${version}
 共通オプション:
   --json                    AI向けの機械可読出力（1行のJSON）
   --yes                     確認を省略する（利用者に確認してから付ける）
-  --profile <名前>          接続するCozeniの環境（既定: production）
+  --profile <名前>          接続するCozeniの環境（既定: init で選んだもの、
+                            無ければ production）
   --help, --version
 `;
 
@@ -120,6 +138,8 @@ type Flags = {
   "api-origin"?: string;
   "app-origin"?: string;
   complete?: boolean;
+  creator?: string;
+  "allow-duplicate"?: boolean;
   name?: string;
   price?: string;
   "access-url"?: string;
@@ -140,6 +160,8 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         "api-origin": { type: "string" },
         "app-origin": { type: "string" },
         complete: { type: "boolean" },
+        creator: { type: "string" },
+        "allow-duplicate": { type: "boolean" },
         name: { type: "string" },
         price: { type: "string" },
         "access-url": { type: "string" },
@@ -203,11 +225,33 @@ export async function run(context: CliContext): Promise<number> {
         { hint: `${CLI} --help で使い方を確認してください。` },
       );
 
+    const store = createStore(context.env);
+    if (name === "init") {
+      write(
+        context,
+        json,
+        await init(
+          {
+            cwd: context.cwd,
+            env: context.env,
+            version,
+            runCommand: context.runCommand,
+          },
+          store,
+          flags,
+        ),
+      );
+      return 0;
+    }
+
     const warning = await skillVersionWarning(context.cwd, version);
     if (warning) context.stderr.write(`${warning}\n`);
 
-    const profile = resolveProfile(flags, context.env);
-    const store = createStore(context.env);
+    const profile = resolveProfile(
+      flags,
+      context.env,
+      await store.loadConfig(),
+    );
     // 保存先に不備があっても、ここでは止めない（必要なコマンドがその場で報告する）。
     await removeExpiredIdempotencyKeys(store, context.now()).catch(() => {});
     const interactive = isInteractive(
@@ -224,11 +268,21 @@ export async function run(context: CliContext): Promise<number> {
     };
 
     if (name === "login") {
+      if (flags.complete) {
+        write(
+          context,
+          json,
+          loginOutput(await completeLogin(loginContext, store, profile)),
+        );
+        return 0;
+      }
+      // 保存済みのキーがそのまま使えるなら、承認をやり直させない。
+      const current = await currentLogin(loginContext, store, profile);
       write(
         context,
         json,
-        flags.complete
-          ? loginOutput(await completeLogin(loginContext, store, profile))
+        current
+          ? loginOutput(current)
           : interactive
             ? await interactiveLogin(context, loginContext, store, profile)
             : startOutput(await startLogin(loginContext, store, profile)),
@@ -278,6 +332,7 @@ export async function run(context: CliContext): Promise<number> {
       context.fetch,
       context.now(),
     );
+    await verifyCreator(current, context.now());
     const id = args[0] ?? "";
     const output =
       name === "whoami"
@@ -322,11 +377,16 @@ function startOutput(result: Awaited<ReturnType<typeof startLogin>>): Output {
 function loginOutput(
   result: Awaited<ReturnType<typeof completeLogin>>,
 ): Output {
-  const human = [
-    `ログインしました（クリエイター: ${result.creator_id}、環境: ${result.environment}）。`,
-    `ログインの有効期限: ${result.expires_at}（セキュリティのため30日ごとに確認をお願いしています）`,
-    `認証情報は ${result.credentials_path} に平文で保存しました（所有者だけが読める権限です）。`,
-  ];
+  const human = result.already_logged_in
+    ? [
+        `すでにログインしています（クリエイター: ${result.creator_id}、環境: ${result.environment}）。`,
+        `ログインの有効期限: ${result.expires_at}`,
+      ]
+    : [
+        `ログインしました（クリエイター: ${result.creator_id}、環境: ${result.environment}）。`,
+        `ログインの有効期限: ${result.expires_at}（セキュリティのため30日ごとに確認をお願いしています）`,
+        `認証情報は ${result.credentials_path} に平文で保存しました（所有者だけが読める権限です）。`,
+      ];
   if (result.warnings.includes("previous_key_not_revoked"))
     human.push(
       "注意: 前のログインのキーを失効できませんでした。30日で自動的に無効になります。",
@@ -335,6 +395,7 @@ function loginOutput(
     human.push(
       "注意: 環境変数 COZENI_API_KEY が設定されているため、以後のコマンドはそちらのキーを使います。ログインしたキーを使うには環境変数から外してください。",
     );
+  human.push(`次に実行します: ${result.next_step}`);
   return { data: { ...result }, human };
 }
 

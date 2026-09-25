@@ -14,22 +14,24 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 
 ## インストール
 
-対象サイトがすでに使用しているpackage managerで依存へ追加します。**取得に認証は必要ありません。**
+サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npm install @nulogic/cozeni-sdk
-# または: bun add / pnpm add / yarn add @nulogic/cozeni-sdk
+npx @nulogic/cozeni-sdk@0.5.0 init --creator <クリエイターID>
 ```
 
-コーディングAIに導入を任せる場合は、skillもプロジェクトへ追加します（[skills](https://github.com/vercel-labs/skills) CLIを使用）。追加されたskillはプロジェクトと一緒にcommitしてください。
+`init` は次を行います（通信するのは package manager だけです）。
 
-```sh
-npx skills add nulogic-jp/cozeni-sdk
-```
+1. 実行した場所から上へたどって `package.json` のある場所をプロジェクトのルートにする。
+2. `package.json` の `packageManager`（例 `pnpm@9.1.0`）、無ければ lockfile（`bun.lock`・`bun.lockb` → bun、`pnpm-lock.yaml` → pnpm、`yarn.lock` → yarn、`package-lock.json` か無し → npm）で package manager を決め、`@nulogic/cozeni-sdk@<実行した版>` を厳密な版で通常の依存として入れる。同じ版が依存に入っていれば入れ直さない。ワークスペースでは、リポジトリの端（`.git` のある場所）まで上位を探す。`packageManager` と lockfile が食い違えば選ばずに `package_manager_conflict` で止まる。
+3. 同梱のskill（[`skills/cozeni-setup/`](skills/cozeni-setup/SKILL.md)）を `.agents/skills/cozeni-setup` にコピーする。Claude Code の実行環境（`CLAUDECODE`）か、プロジェクトに `.claude/` があれば `.claude/skills/cozeni-setup` にもコピーする。シンボリックリンクは使わず、既存のものはこの版のskillで置き換える（同じ中身なら何もしない）。途中の `.agents`・`.agents/skills`・`.claude`・`.claude/skills` がシンボリックリンクだったり、実体がプロジェクトの外にあったりすれば、書き込まずに `unsafe_path` で止まる。
+4. 接続先（プロファイル）と、そのプロファイルで使うクリエイターを設定ファイルに覚える（下の「既定のプロファイル」）。`--profile` を省略した再実行では、今の既定のプロファイルを引き継ぐ。保存済みのプロファイルは `--profile` だけで再初期化でき、接続先を指定し直す必要はない。
 
-skill（[`skills/cozeni-setup/`](skills/cozeni-setup/SKILL.md)）は、いつどのCLIを呼ぶか、コードのどこに何を書くかをAIに伝えます。frontmatterの `metadata.cozeni-sdk-version` に対応するSDKの版の範囲があり、CLIは起動時にこれを照合して、ずれていれば更新を促します。
+package manager の出力は表示しません（認証情報を含みうるため）。失敗したら、実行したコマンド（`error.command`）と終了コード（`error.exit_code`）を `install_failed` で返すので、同じコマンドを手で実行して原因を確かめてください。手で入れる場合は `npm install @nulogic/cozeni-sdk`（または `bun add` / `pnpm add` / `yarn add`）です。
 
-Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは、この流れ（SDKとskillの追加、CLIでのログインと商品の作成、コードの配置）をAIに指示します。導入プロンプトを使わず、以下のリファレンスだけを見て自分で実装することもできます。その場合も `examples/` の実装が完全な参照になります。
+skillは、いつどのCLIを呼ぶか、コードのどこに何を書くか、どう確かめて報告するかをAIに伝えます。追加されたskillはプロジェクトと一緒にcommitしてください。**`cozeni-setup` のフォルダは `init` が管理し、更新時に丸ごと置き換えます。手で編集せず、プロジェクト独自の手順は `AGENTS.md` などに書いてください。**frontmatterの `metadata.cozeni-sdk-version` に対応するSDKの版の範囲があり、CLIは起動時にこれを照合して、ずれていれば `init` での更新を促します。
+
+Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは、この `init` を最初の1コマンドとしてAIに渡します。以後AIは、CLIの出力（`next_step`・`error.hint`）とskillに従って進みます。導入プロンプトを使わず、以下のリファレンスだけを見て自分で実装することもできます。その場合も `examples/` の実装が完全な参照になります。
 
 ## CLI
 
@@ -41,14 +43,15 @@ bin名は `cozeni` ですが、案内や自動化では **`npx @nulogic/cozeni-s
 
 | コマンド | 役割 |
 |---|---|
-| `login` | ログインを始める。承認用のURLとコードを表示する |
+| `init --creator <クリエイターID>` | 導入の準備。SDKを依存に追加し、skillを置き、接続先と使うクリエイターを覚える |
+| `login` | ログインを始める。承認用のURLとコードを表示する（ログイン済みなら何もしない） |
 | `login --complete` | 承認を確かめ、キーを保存する |
 | `logout` | サーバー側でキーを失効させ、手元の認証情報を消す |
 | `whoami` | 接続先の環境・クリエイター・キーの期限を表示 |
 | `status` | 販売できる状態か（`sales`）、次にやること（`next_actions`）、商品一覧、キーの期限 |
 | `products list` | 商品一覧 |
 | `products get <商品ID>` | 商品1件と購入リンクの状態（取得だけで、リンクを発行しない） |
-| `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す |
+| `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す。同じ内容の有効な商品があれば作らずにそれを返す（`--allow-duplicate` で作る） |
 | `products update <商品ID> [--name] [--price] [--access-url]` | 商品を変更する |
 | `link <商品ID>` | 標準の購入リンクを取得する（無ければ発行） |
 
@@ -63,11 +66,23 @@ AIエージェントのシェルはコマンドが終わるまで出力を返さ
 
 TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGENT`・`CODEX_*` などの環境変数）やCIでなければ、1段階でコードを表示して承認を待ちます（Enterでブラウザを開きます）。
 
+保存済みのキーが有効（`GET /account` が成功）で、期待するクリエイターと一致し、期限まで7日以上あれば、`login` は何もせずに成功します（`data.already_logged_in: true`）。導入の手順を最初からやり直しても、承認を求め直しません。
+
+`login --complete` で得たキーのクリエイターが期待と違う（ブラウザで別のアカウントにログインしたまま承認した）場合は、そのキーを保存せずにサーバーでも失効させ、`creator_mismatch` で止まります。
+
 ログインで得るキーは商品と購入リンクの操作に限られ、**発行から30日で失効します**（使っても延長されません）。ログインし直すと、新しいキーを保存したあとで前のキーを失効させます。
+
+### 既定のプロファイルとクリエイターの照合
+
+`init` は `$XDG_CONFIG_HOME/cozeni/config.json` に、既定のプロファイル（`default_profile`）と、プロファイルごとの期待するクリエイター（`expected_creator_id`）を保存します。秘密は含みません。
+
+- `--profile` を省略すると、`default_profile`（無ければ `production`）を使います。`init` の `--profile` の既定は `production` です。
+- `production` の接続先は固定です。それ以外のプロファイルは、`init` で `--api-origin` と `--app-origin` を必須にし、プロファイルと一緒に保存します。以後のコマンドでは省略できます（指定 → `COZENI_API_ORIGIN` → 保存した値の順）。保存済みのキーは、発行されたオリジンにしか送りません。
+- 期待するクリエイターがあるプロファイルでは、使うキーのクリエイター（保存したキーなら保存値、`COZENI_API_KEY` なら `GET /account` の結果）が違えば、変更系の要求を送る前に `creator_mismatch` で止まります。
 
 ### 出力と終了コード
 
-`--json` を付けると、1行のJSONを標準出力に出します。秘密（APIキー）はどの出力にも含めません。
+`--json` を付けると、1行のJSONを標準出力に出します。秘密（APIキー）はどの出力にも含めません。主要なコマンド（`init`・`login`・`status`・`products get`・`products create`）の `data.next_step` は次に打つコマンドです（無ければ `null`）。`status` の `data.message_for_user` は、利用者にそのまま見せられる日本語の「次にやること」の行です（販売できるなら「すぐ販売できます。」）。
 
 ```json
 {"ok":true,"data":{}}
@@ -77,10 +92,10 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 | 終了コード | 意味 | 代表的な `error.code` |
 |---|---|---|
 | 0 | 成功 | — |
-| 1 | 想定外のエラー | `internal`・`invalid_response`・`insecure_storage` |
+| 1 | 想定外のエラー | `internal`・`invalid_response`・`insecure_storage`・`invalid_state`・`install_failed`・`package_manager_conflict`・`unsafe_path` |
 | 2 | 使い方の誤り・確認が必要 | `invalid_input`・`confirmation_required`・`origin_mismatch` |
 | 3 | ログインが必要 | `login_required`・`key_expired`・`access_denied`・`expired_token` |
-| 4 | 権限・規約・状態で拒否 | `terms_consent_required`・`forbidden`・`not_found`・`product_archived`・`idempotency_conflict` |
+| 4 | 権限・規約・状態で拒否 | `terms_consent_required`・`forbidden`・`not_found`・`product_archived`・`idempotency_conflict`・`creator_mismatch` |
 | 5 | 通信できない・一時障害 | `network_unreachable`・`unexpected_redirect`・`rate_limited`・`unavailable` |
 | 6 | 承認待ち | `authorization_pending` |
 
@@ -90,13 +105,16 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 商品の作成、価格の変更、`access_url`（購入後に表示するページ）の変更は、`--yes` が無ければ実行しません。`access_url` の変更は既存の購入者全員にすぐ反映されるためです。TTYでは変更前後を示して確認を求め、TTYが無ければ `confirmation_required` で止まります（確認する内容は `error.details`）。AIは利用者に確認してから `--yes` を付けて実行します。
 
-`products create` は入力ごとに冪等キーを保存してから送信します。タイムアウトなどで結果が分からないときは、同じコマンドをそのまま再実行すれば、商品が二重に作られません。冪等キーは成功後も24時間残し、その間に同じ入力で再実行すると、作成済みの商品を返します（`data.reused: true`）。24時間を過ぎたキーはCLIの起動時に消します。価格は50円から9,999,999円までの整数です。
+`products create` は、作成の前に商品一覧を見て、名前・価格・`access_url` が同じ有効な商品があれば、作らずにそれを返します（`data.reused: true`、`data.reason: "same_product_exists"`。確認は不要です）。そのとき購入リンクは取得だけで、未発行なら発行せず `data.next_step` に `link` を返します。同じ内容でも別の商品を作るには `--allow-duplicate` を付けます。
+
+さらに、入力ごとに冪等キーを保存してから送信します。タイムアウトなどで結果が分からないときは、同じコマンドをそのまま再実行すれば、商品が二重に作られません。冪等キーは成功後も24時間残し、その間に同じ入力で再実行すると、作成済みの商品を返します（`data.reused: true`、`data.reason: "idempotent_retry"`。`--allow-duplicate` のときは作成済みのキーを使い回しません）。24時間を過ぎたキーはCLIの起動時に消します。価格は50円から9,999,999円までの整数です。
 
 ### 認証情報の保存先
 
 `$XDG_CONFIG_HOME/cozeni/`（未設定なら `~/.config/cozeni/`）に保存します。プロジェクトの中には置きません。
 
 - `credentials.json`：プロファイルごとのキーと接続先。平文ですが、ディレクトリ0700・ファイル0600で書きます。
+- `config.json`：既定のプロファイルと、プロファイルごとの期待するクリエイター・接続先（`init` が書く）。秘密は含みませんが、同じ権限で書きます。
 - `pending/`：ログインの待ち状態と、未完了の冪等キー。
 - 書き込みは一時ファイルを経由して置き換えます。シンボリックリンクや、所有者以外が読める権限のファイルを見つけたら、読み書きせずに止まります。
 
@@ -106,7 +124,6 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 環境変数 `COZENI_API_KEY` があれば、保存したキーより優先して使います（CIなど向け）。`logout` はこのキーを失効させません。
 
-## 管理API
 ## 管理API
 
 ```ts

@@ -1,10 +1,10 @@
 // 利用者のプロジェクトに置かれたskillが、実行中のCLI（= SDK）の版に対応しているかを確かめる。
-// skillのfrontmatterの`metadata.cozeni-sdk-version`に版の範囲（例: ">=0.4.0 <0.5.0"）を書く。
+// skillのfrontmatterの`metadata.cozeni-sdk-version`に版の範囲（例: ">=0.5.0 <0.6.0"）を書く。
 // ずれていても処理は止めず、警告だけ出す。
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
-// `npx skills add`がエージェントごとに配置する場所と、リポジトリ直下の`skills/`。
+// `init`がコピーする場所（.agents・.claude）と、ほかのエージェントの場所、リポジトリ直下の`skills/`。
 const locations = [
   ".agents/skills",
   ".claude/skills",
@@ -78,7 +78,7 @@ export async function skillVersionWarning(
     }
     const range = skillRange(text);
     if (range && satisfies(version, range) === false)
-      return `警告: skill（${relative(cwd, path)}）の対応するSDKの版は ${range} ですが、実行中のCLIは ${version} です。npx skills add nulogic-jp/cozeni-sdk で skill を更新してください。`;
+      return `警告: skill（${relative(cwd, path)}）の対応するSDKの版は ${range} ですが、実行中のCLIは ${version} です。npx @nulogic/cozeni-sdk init で skill を更新してください（初めて init するプロジェクトでは --creator <クリエイターID> も付けます。IDは whoami で確かめられます）。`;
   }
   return undefined;
 }

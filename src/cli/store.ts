@@ -22,6 +22,22 @@ interface CredentialsFile {
   profiles: Record<string, Credential>;
 }
 
+/** プロファイルごとの既定値。`init` が書き、以後のコマンドが読む。秘密は含めない。 */
+export interface ProfileConfig {
+  expected_creator_id?: string;
+  // production以外の接続先。productionは固定のため保存しない。
+  api_origin?: string;
+  app_origin?: string;
+}
+export interface Config {
+  version: 1;
+  default_profile?: string;
+  profiles: Record<string, ProfileConfig>;
+}
+
+export const PROFILE_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+export const CREATOR_ID = /^cre_[A-Za-z0-9_-]{1,120}$/;
+
 // Windowsは権限ビットで所有者限定を表せないため、権限の検査を行わない。
 const checkModes = process.platform !== "win32";
 
@@ -207,9 +223,60 @@ export function createStore(env: Record<string, string | undefined>) {
     return file as CredentialsFile;
   }
 
+  const configPath = join(directory, "config.json");
+  const invalidConfig = () =>
+    new CliError(
+      "invalid_state",
+      `設定ファイル ${configPath} を読み取れません。`,
+      {
+        hint: `${configPath} を削除してから、npx @nulogic/cozeni-sdk init をやり直してください。`,
+      },
+    );
+  function isOrigin(value: unknown): boolean {
+    if (typeof value !== "string") return false;
+    try {
+      return new URL(value).origin === value;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     directory,
     credentialsPath,
+    configPath,
+    async loadConfig(): Promise<Config> {
+      const data = await readJson(directory, configPath);
+      if (data === undefined) return { version: 1, profiles: {} };
+      const file = data as Partial<Config>;
+      if (
+        file.version !== 1 ||
+        typeof file.profiles !== "object" ||
+        file.profiles === null ||
+        Array.isArray(file.profiles) ||
+        (file.default_profile !== undefined &&
+          (typeof file.default_profile !== "string" ||
+            !PROFILE_NAME.test(file.default_profile)))
+      )
+        throw invalidConfig();
+      for (const [name, entry] of Object.entries(file.profiles)) {
+        if (
+          !PROFILE_NAME.test(name) ||
+          typeof entry !== "object" ||
+          entry === null ||
+          (entry.expected_creator_id !== undefined &&
+            (typeof entry.expected_creator_id !== "string" ||
+              !CREATOR_ID.test(entry.expected_creator_id))) ||
+          (entry.api_origin !== undefined && !isOrigin(entry.api_origin)) ||
+          (entry.app_origin !== undefined && !isOrigin(entry.app_origin))
+        )
+          throw invalidConfig();
+      }
+      return file as Config;
+    },
+    async saveConfig(config: Config) {
+      await writeJson(directory, configPath, config);
+    },
     async loadCredential(profile: string): Promise<Credential | undefined> {
       const entry = (await loadAll()).profiles[profile];
       return isCredential(entry) ? entry : undefined;
