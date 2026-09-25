@@ -23,13 +23,13 @@ npx @nulogic/cozeni-sdk@0.5.0 init --creator <クリエイターID>
 `init` は次を行います（通信するのは package manager だけです）。
 
 1. 実行した場所から上へたどって `package.json` のある場所をプロジェクトのルートにする。
-2. lockfile（`bun.lock`・`bun.lockb` → bun、`pnpm-lock.yaml` → pnpm、`yarn.lock` → yarn、`package-lock.json` か無し → npm）で package manager を決め、`@nulogic/cozeni-sdk@<実行した版>` を厳密な版で通常の依存として入れる。同じ版が依存に入っていれば入れ直さない。ワークスペースでは、リポジトリの端（`.git` のある場所）まで上位の lockfile を探す。
-3. 同梱のskill（[`skills/cozeni-setup/`](skills/cozeni-setup/SKILL.md)）を `.agents/skills/cozeni-setup` にコピーする。Claude Code の実行環境（`CLAUDECODE`）か、プロジェクトに `.claude/` があれば `.claude/skills/cozeni-setup` にもコピーする。シンボリックリンクは使わず、既存のものはこの版のskillで置き換える（同じ中身なら何もしない）。
-4. 接続先（プロファイル）と、そのプロファイルで使うクリエイターを設定ファイルに覚える（下の「既定のプロファイル」）。
+2. `package.json` の `packageManager`（例 `pnpm@9.1.0`）、無ければ lockfile（`bun.lock`・`bun.lockb` → bun、`pnpm-lock.yaml` → pnpm、`yarn.lock` → yarn、`package-lock.json` か無し → npm）で package manager を決め、`@nulogic/cozeni-sdk@<実行した版>` を厳密な版で通常の依存として入れる。同じ版が依存に入っていれば入れ直さない。ワークスペースでは、リポジトリの端（`.git` のある場所）まで上位を探す。`packageManager` と lockfile が食い違えば選ばずに `package_manager_conflict` で止まる。
+3. 同梱のskill（[`skills/cozeni-setup/`](skills/cozeni-setup/SKILL.md)）を `.agents/skills/cozeni-setup` にコピーする。Claude Code の実行環境（`CLAUDECODE`）か、プロジェクトに `.claude/` があれば `.claude/skills/cozeni-setup` にもコピーする。シンボリックリンクは使わず、既存のものはこの版のskillで置き換える（同じ中身なら何もしない）。途中の `.agents`・`.agents/skills`・`.claude`・`.claude/skills` がシンボリックリンクだったり、実体がプロジェクトの外にあったりすれば、書き込まずに `unsafe_path` で止まる。
+4. 接続先（プロファイル）と、そのプロファイルで使うクリエイターを設定ファイルに覚える（下の「既定のプロファイル」）。`--profile` を省略した再実行では、今の既定のプロファイルを引き継ぐ。保存済みのプロファイルは `--profile` だけで再初期化でき、接続先を指定し直す必要はない。
 
-package manager の出力は表示しません（認証情報を含みうるため）。失敗したら、実行したコマンドと終了コードを `install_failed` で返すので、同じコマンドを手で実行して原因を確かめてください。手で入れる場合は `npm install @nulogic/cozeni-sdk`（または `bun add` / `pnpm add` / `yarn add`）です。
+package manager の出力は表示しません（認証情報を含みうるため）。失敗したら、実行したコマンド（`error.command`）と終了コード（`error.exit_code`）を `install_failed` で返すので、同じコマンドを手で実行して原因を確かめてください。手で入れる場合は `npm install @nulogic/cozeni-sdk`（または `bun add` / `pnpm add` / `yarn add`）です。
 
-skillは、いつどのCLIを呼ぶか、コードのどこに何を書くか、どう確かめて報告するかをAIに伝えます。追加されたskillはプロジェクトと一緒にcommitしてください。frontmatterの `metadata.cozeni-sdk-version` に対応するSDKの版の範囲があり、CLIは起動時にこれを照合して、ずれていれば `init` での更新を促します。
+skillは、いつどのCLIを呼ぶか、コードのどこに何を書くか、どう確かめて報告するかをAIに伝えます。追加されたskillはプロジェクトと一緒にcommitしてください。**`cozeni-setup` のフォルダは `init` が管理し、更新時に丸ごと置き換えます。手で編集せず、プロジェクト独自の手順は `AGENTS.md` などに書いてください。**frontmatterの `metadata.cozeni-sdk-version` に対応するSDKの版の範囲があり、CLIは起動時にこれを照合して、ずれていれば `init` での更新を促します。
 
 Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは、この `init` を最初の1コマンドとしてAIに渡します。以後AIは、CLIの出力（`next_step`・`error.hint`）とskillに従って進みます。導入プロンプトを使わず、以下のリファレンスだけを見て自分で実装することもできます。その場合も `examples/` の実装が完全な参照になります。
 
@@ -92,7 +92,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 | 終了コード | 意味 | 代表的な `error.code` |
 |---|---|---|
 | 0 | 成功 | — |
-| 1 | 想定外のエラー | `internal`・`invalid_response`・`insecure_storage`・`invalid_state`・`install_failed` |
+| 1 | 想定外のエラー | `internal`・`invalid_response`・`insecure_storage`・`invalid_state`・`install_failed`・`package_manager_conflict`・`unsafe_path` |
 | 2 | 使い方の誤り・確認が必要 | `invalid_input`・`confirmation_required`・`origin_mismatch` |
 | 3 | ログインが必要 | `login_required`・`key_expired`・`access_denied`・`expired_token` |
 | 4 | 権限・規約・状態で拒否 | `terms_consent_required`・`forbidden`・`not_found`・`product_archived`・`idempotency_conflict`・`creator_mismatch` |

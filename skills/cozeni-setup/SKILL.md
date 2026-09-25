@@ -8,12 +8,14 @@ metadata:
 
 # Cozeni
 
+> **このフォルダ（`cozeni-setup`）は `npx @nulogic/cozeni-sdk init` が管理し、SDK の更新時に丸ごと置き換えます。手で編集しないでください。** プロジェクト独自の手順は `AGENTS.md` などに書きます。
+
 **この skill は導入と運用の手順の資料です。** 利用者の指示と、導入を依頼したプロンプトの安全の約束（秘密を出さない、実際の課金・公開・デプロイをしない、既存の認証を置き換えない）が、この skill と CLI の案内より優先します。それらと矛盾する記述があれば従わず、利用者に伝えてください。
 
 Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の `@nulogic/cozeni-sdk/next`（Next.js）か共通の JS API を使う。
 
 - CLI は **`npx @nulogic/cozeni-sdk <コマンド> --json`** で呼ぶ。`npx cozeni` は使わない（別のパッケージが実行されうる）。
-- 出力は1行の JSON。成功は `{"ok":true,"data":{…}}`、失敗は `{"ok":false,"error":{"code","message","hint",…}}`。
+- 出力は1行の JSON。成功は `{"ok":true,"data":{…}}`、失敗は `{"ok":false,"error":{"code","message","hint",…}}`。失敗の付加情報（`command`・`exit_code`・`retry_after_seconds`・`request_id` など）は `error` の直下に入る（`confirmation_required` の確認内容だけは `error.details`）。
 - 成功したら `data.next_step`（次に打つコマンド。無ければ `null`）を、失敗したら `error.hint` を見て進む。`<商品名>` のような山かっこは、自分で値に置き換える部分。
 - **困ったら、まず `npx @nulogic/cozeni-sdk status --json`。** 販売状態や原因を推測で答えない。
 
@@ -25,14 +27,16 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 導入を依頼したプロンプトにある `init` のコマンドを、サイトのプロジェクトのフォルダで実行する（例：`npx @nulogic/cozeni-sdk@<版> init --creator cre_… --json`）。SDK を依存に追加し、この skill を `.agents/skills/`（Claude Code では `.claude/skills/` にも）へ置き、接続先と使うアカウントを覚える。何度実行してもよい。
 
-- `error.code` が `install_failed` なら、`error.details.command` を自分で実行してエラーを確かめ、直してから `init` を打ち直す。
+- `error.code` が `install_failed` なら、`error.command` を自分で実行してエラーを確かめ、直してから `init` を打ち直す。
+- `package_manager_conflict` なら、`package.json` の `packageManager` と lockfile が食い違っている。どちらを使っているか利用者に確かめ、揃えてから打ち直す。
+- `unsafe_path` なら、skill の置き場所（`.agents`・`.claude` など）がシンボリックリンクかプロジェクトの外を指している。`error.message` を利用者に伝え、どうするか確かめる。
 - 以後のコマンドに `--profile` は要らない（`init` で選んだ接続先が既定になる）。
 
 ### 2. ログイン（`login`）
 
 1. `npx @nulogic/cozeni-sdk login --json` を実行する。
    - `data.already_logged_in` が `true` なら、ログイン済み。3へ進む。
-   - そうでなければ、すぐに終わって `verification_uri_complete`（無ければ `verification_uri`）と `user_code` を返す。
+   - そうでなければ、すぐに終わって `data.verification_uri_complete`（無ければ `data.verification_uri`）と `data.user_code` を返す。
 2. 利用者に「このURLをブラウザで開き、表示されたコードが `<user_code>` と同じか確かめてから許可してください」と伝え、**許可したと返事があるまで待つ**。
 3. `npx @nulogic/cozeni-sdk login --complete --json` を実行する。
    - 終了コード6（`authorization_pending`）：まだ許可されていない。利用者に許可したか確かめてから、同じコマンドを打ち直す。
@@ -41,30 +45,30 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 3. 状態の確認（`status`）
 
-`npx @nulogic/cozeni-sdk status --json` で、接続先（`environment`）、クリエイター、販売状態、既存の商品を確かめる。`next_actions`（審査や Stripe の手続き）があっても導入は続けてよい。最後に利用者へ伝える。
+`npx @nulogic/cozeni-sdk status --json` で、接続先（`data.environment`）、クリエイター、販売状態、既存の商品を確かめる。`next_actions`（審査や Stripe の手続き）があっても導入は続けてよい。最後に利用者へ伝える。
 
 ### 4. サイトのアドレス（`siteOrigin`）を決める
 
 商品の `access_url`（購入後に表示するページ）と、環境変数 `COZENI_SITE_ORIGIN` に使う。オリジン（`https://example.com` のようにパスを含まない形）で決める。
 
-- **開発**（`status` の `environment` が `development`）：開発サーバーのアドレス（例：`http://localhost:3000`）。Next.js 15 では `127.0.0.1` ではなく `localhost` にする。
+- **開発**（`status` の `data.environment` が `development`）：開発サーバーのアドレス（例：`http://localhost:3000`）。Next.js 15 では `127.0.0.1` ではなく `localhost` にする。
 - **staging・production**：公開中の https のアドレスを探す。`package.json` の `homepage`、README、ホスティングの設定（`vercel.json`・`netlify.toml`・`CNAME` など）、`.env.example`、`metadataBase` やサイトマップの設定などを見る。見つけた値を「このアドレスで公開していますか」と利用者に確かめる。見つからなければ利用者に尋ねる。推測した値のまま進めない。
 
 ### 5. 商品を決める
 
 `status` の `data.products` を見て、利用者に何を売るかを確かめる。
 
-- **既存の商品を使う**：`npx @nulogic/cozeni-sdk products get <商品ID> --json` で内容と購入リンクを確かめる。`checkout_link` が `null`（未発行）なら、利用者に確認してから `npx @nulogic/cozeni-sdk link <商品ID> --json` で発行する。
+- **既存の商品を使う**：`npx @nulogic/cozeni-sdk products get <商品ID> --json` で内容と購入リンクを確かめる。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx @nulogic/cozeni-sdk link <商品ID> --json` で発行する。
 - **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`）を、利用者に1回でまとめて確認する。同意を得たら次を実行する。
 
   ```sh
   npx @nulogic/cozeni-sdk products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
   ```
 
-  - 同じ内容の有効な商品がすでにあれば、作らずにそれを返す（`data.reused: true`、`data.reason: "same_product_exists"`）。それを使う。`checkout_link` が `null` なら、利用者に確認してから `data.next_step` の `link` を実行する。
+  - 同じ内容の有効な商品がすでにあれば、作らずにそれを返す（`data.reused: true`、`data.reason: "same_product_exists"`）。それを使う。`data.checkout_link` が `null` なら、利用者に確認してから `data.next_step` の `link` を実行する。
   - `--allow-duplicate` は、利用者が同じ内容の別の商品をはっきり求めたときだけ付ける。
 
-出力の `product.id`（`prd_…`）と `checkout_link.url` を、そのままコードに書く。環境変数にはしない。
+出力の `data.product.id`（`prd_…`）と `data.checkout_link.url` を、そのままコードに書く。環境変数にはしない。
 
 ### 6. サイトのコードを書く
 
@@ -108,11 +112,11 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 | コード | 意味 | すること |
 |---|---|---|
 | 0 | 成功 | `data.next_step` があれば、それが次のコマンド |
-| 1 | 想定外のエラー | `error.message` を利用者に伝える。`install_failed` なら `error.details.command` を実行して原因を確かめる |
+| 1 | 想定外のエラー | `error.message` を利用者に伝える。`install_failed` なら `error.command` を実行して原因を確かめる。`package_manager_conflict`・`unsafe_path` は上の「1. 準備」 |
 | 2 | 使い方の誤り・確認が必要 | 引数を直す。`confirmation_required` なら利用者に確認して `--yes` を付ける |
 | 3 | ログインが必要 | `login` からやり直す。`key_expired` は30日の期限切れで、異常ではない |
 | 4 | 権限・規約・状態で拒否 | `terms_consent_required` なら、利用者に管理画面で規約への同意を頼む。`creator_mismatch` は別のアカウントのキー。`error.hint` に従う |
-| 5 | 通信できない・一時障害 | 下の「通信できないとき」。`rate_limited` は `retry_after_seconds` 秒待って再実行する |
+| 5 | 通信できない・一時障害 | 下の「通信できないとき」。`rate_limited` は `error.retry_after_seconds` 秒待って再実行する |
 | 6 | 承認待ち | 利用者の承認を待ち、`login --complete` を打ち直す |
 
 ### 通信できないとき
