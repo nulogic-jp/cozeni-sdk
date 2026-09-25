@@ -19,6 +19,7 @@ vi.mock("next/navigation", () => ({ redirect }));
 
 import {
   AccessDenied,
+  clearCozeniHandoff,
   cozeniProxy,
   entitlement,
   handleCozeniHandoff,
@@ -182,6 +183,39 @@ describe("cozeniProxy のハンドオフ", () => {
     // response.cookies経由だと、同じリクエストのページからも印が消えてしまう。
     expect(response?.headers.has("x-middleware-set-cookie")).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("既存のmiddlewareとの組み合わせ", () => {
+  it("handleCozeniHandoffは印だけのリクエストを横取りしない（既存の処理を飛ばさせない）", async () => {
+    api(() => json({}));
+    expect(
+      await handleCozeniHandoff(
+        new Request(`${SITE}/admin`, {
+          headers: { Cookie: "cozeni_handoff=ok" },
+        }),
+      ),
+    ).toBeUndefined();
+  });
+  it("clearCozeniHandoffは印があるときだけ既存の応答で印を消す", () => {
+    const marked = new Request(`${SITE}/members`, {
+      headers: { Cookie: "cozeni_handoff=ok" },
+    });
+    // Response.redirect()のようにヘッダーを変更できない応答でも扱える。
+    const redirected = clearCozeniHandoff(
+      marked,
+      Response.redirect(`${SITE}/login`, 307),
+    );
+    expect(redirected.status).toBe(307);
+    expect(redirected.headers.get("location")).toBe(`${SITE}/login`);
+    expect(setCookies(redirected)).toEqual([
+      "cozeni_handoff=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure",
+    ]);
+    const untouched = new Response("ok");
+    expect(clearCozeniHandoff(new Request(`${SITE}/members`), untouched)).toBe(
+      untouched,
+    );
+    expect(setCookies(untouched)).toEqual([]);
   });
 });
 

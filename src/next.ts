@@ -112,16 +112,52 @@ export interface HandoffOptions
   siteOrigin?: string;
 }
 
+/** 印の消去にSecureを付けるか。設定が不正でも印は消すため、受信URLで代用する。 */
+function secureSite(request: Request): boolean {
+  try {
+    const configured = process.env.COZENI_SITE_ORIGIN;
+    if (configured)
+      return trustedSiteUrl(configured, "/").protocol === "https:";
+  } catch {
+    // 下の受信URLの判定に落とす。
+  }
+  return new URL(request.url).protocol === "https:";
+}
+
 /**
- * `cozeni_code` の交換と停止条件の印を扱う。既存のmiddleware / proxyと組み合わせる用。
+ * ハンドオフ直後の印があれば、応答で印を消す（Set-Cookieを足した応答を返す）。
+ * 印が無ければ同じ応答をそのまま返す。
  *
- * - `?cozeni_code` 付きのGET: コードを交換して `cozeni_customer` を設定し、コードを除いた
- *   同じURL（自サイトのオリジン）へ303で戻す。結果は `cozeni_handoff` の印で伝える。
- * - `cozeni_handoff` 付きのリクエスト: そのまま通し（NextResponse.next()）、応答で印を消す。
- *   ページはこのリクエストの間だけ印を読める。
- * - それ以外: undefined（何もしない）。
+ * `response.cookies` ではなくヘッダーで消すこと。Next.jsはmiddlewareのCookie操作を
+ * 同じリクエストにも反映するため、ページから印が見えなくなり停止条件が効かない。
+ */
+export function clearCozeniHandoff(
+  request: Request,
+  response: Response,
+): Response {
+  if (cookieValue(request.headers.get("cookie"), HANDOFF_COOKIE) === undefined)
+    return response;
+  const clear = markCookie("", secureSite(request));
+  try {
+    response.headers.append("Set-Cookie", clear);
+    return response;
+  } catch {
+    // Response.redirect()等はヘッダーを変更できないため、複製してから足す。
+    const copy = new Response(response.body, response);
+    copy.headers.append("Set-Cookie", clear);
+    return copy;
+  }
+}
+
+/**
+ * `?cozeni_code` 付きのGETを処理する。既存のmiddleware / proxyと組み合わせる用。
  *
+ * コードを交換して `cozeni_customer` を設定し、コードを除いた同じURL（自サイトのオリジン）へ
+ * 303で戻す。結果は1回だけ有効な `cozeni_handoff` の印（ok / invalid_code / unavailable）で
+ * 伝える。`cozeni_code` が無いリクエストではundefinedを返す（既存の処理をそのまま続ける）。
  * 戻り値があれば、middleware / proxyはそれをそのまま返すこと。
+ *
+ * 次のリクエストで印を消すのは `clearCozeniHandoff()` の役割。
  */
 export async function handleCozeniHandoff(
   request: Request,
@@ -129,25 +165,8 @@ export async function handleCozeniHandoff(
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
   const codes = url.searchParams.getAll("cozeni_code");
+  if (codes.length === 0 || request.method !== "GET") return undefined;
   const configuredSite = options.siteOrigin ?? process.env.COZENI_SITE_ORIGIN;
-  if (codes.length === 0 || request.method !== "GET") {
-    if (
-      cookieValue(request.headers.get("cookie"), HANDOFF_COOKIE) === undefined
-    )
-      return undefined;
-    let secure = url.protocol === "https:";
-    try {
-      if (configuredSite)
-        secure = trustedSiteUrl(configuredSite, "/").protocol === "https:";
-    } catch {
-      // 設定が不正でも印は消す。Secureの判定だけ受信URLに合わせる。
-    }
-    const response = NextResponse.next();
-    // response.cookies を使うと、同じリクエストのページからも印が見えなくなる
-    // （Next.jsがmiddlewareのCookie操作をリクエストへ反映するため）。ヘッダーで直接消す。
-    response.headers.append("Set-Cookie", markCookie("", secure));
-    return response;
-  }
 
   let target: URL;
   try {
@@ -200,11 +219,21 @@ export async function handleCozeniHandoff(
  * export { cozeniProxy as proxy } from "@nulogic/cozeni-sdk/next";
  * ```
  *
+ * `cozeni_code` 付きのGETは `handleCozeniHandoff()` で処理し、印が付いた次のリクエストは
+ * ページへ通したうえで応答で印を消す。それ以外は何もしない。
+ *
  * Next.jsは第2引数にイベントを渡すため、この関数は設定を受け取らない。
- * 設定を渡したい場合や既存のmiddlewareと組み合わせる場合は `handleCozeniHandoff()` を使う。
+ * 既存のmiddlewareがある場合は、`handleCozeniHandoff()` と `clearCozeniHandoff()` を
+ * 既存の処理に組み込む（この関数に置き換えると、既存の処理が動かなくなる）。
  */
-export function cozeniProxy(request: Request): Promise<Response | undefined> {
-  return handleCozeniHandoff(request);
+export async function cozeniProxy(
+  request: Request,
+): Promise<Response | undefined> {
+  const handoff = await handleCozeniHandoff(request);
+  if (handoff) return handoff;
+  if (cookieValue(request.headers.get("cookie"), HANDOFF_COOKIE) === undefined)
+    return undefined;
+  return clearCozeniHandoff(request, NextResponse.next());
 }
 
 /**
