@@ -39,7 +39,8 @@ describe("管理API", () => {
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("saved-key");
     expect(init).toMatchObject({
       cache: "no-store",
-      redirect: "error",
+      // 3xxを追わず、下のテストのとおり明示的なエラーにする。
+      redirect: "manual",
       credentials: "omit",
     });
     await client.checkoutLinks.ensure("p");
@@ -90,6 +91,40 @@ describe("管理API", () => {
       });
       expect(String(error)).not.toContain("secret");
     }
+  });
+  it.each([301, 302, 303, 307, 308])(
+    "APIキー付き要求が%sを受けたら追わずにunexpected_redirectで止める",
+    async (status) => {
+      const fetch = vi.fn().mockResolvedValue(
+        new Response(null, {
+          status,
+          headers: { Location: "https://attacker.example/steal" },
+        }),
+      );
+      const client = createManagementClient({
+        apiOrigin,
+        apiKey: "secret",
+        fetch,
+      });
+      await expect(client.account.get()).rejects.toMatchObject({
+        code: "unexpected_redirect",
+        status,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("ブラウザ互換のopaqueredirect応答もunexpected_redirectにする", async () => {
+    const opaque = new Response(null, { status: 200 });
+    Object.defineProperty(opaque, "type", { value: "opaqueredirect" });
+    Object.defineProperty(opaque, "status", { value: 0 });
+    const client = createManagementClient({
+      apiOrigin,
+      apiKey: "secret",
+      fetch: vi.fn().mockResolvedValue(opaque),
+    });
+    await expect(client.account.get()).rejects.toMatchObject({
+      code: "unexpected_redirect",
+    });
   });
   it("terms_consent_requiredをinvalid_responseへ潰さず区別する", async () => {
     const fetch = vi.fn().mockResolvedValue(

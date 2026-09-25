@@ -1,5 +1,5 @@
-import { setting } from "../lib/cozeni";
-export const dynamic = "force-dynamic";
+import { CHECKOUT_URL } from "../lib/cozeni";
+
 export default function Home() {
   return (
     <main>
@@ -7,7 +7,7 @@ export default function Home() {
       <p>
         買い切り商品の購入リンクと、サーバーで保護されたページの導入例です。
       </p>
-      <a href={setting("COZENI_CHECKOUT_URL")}>購入する</a>
+      <a href={CHECKOUT_URL}>購入する</a>
       <p>
         <a href="/members">購入者限定ページへ</a>
       </p>

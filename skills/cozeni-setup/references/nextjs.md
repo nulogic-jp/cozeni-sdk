@@ -1,32 +1,94 @@
-# Next.js App Routerへの実装
+# Next.js（App Router）への実装
 
-このリポジトリの [`examples/nextjs`](../../../examples/nextjs) は、買い切り1商品・保護ページ1つの実行例である。対象アプリのNext.js / React版、`src/`有無、既存のmiddlewareまたはproxy、認証、runtimeに合わせ、例全体で既存アプリを上書きしない。
+Next.js 15・16 の App Router に対応する。実行できる完全な例は、配布パッケージ内の [`examples/nextjs`](../../../examples/nextjs) にある。例で既存アプリを上書きせず、対象アプリの `src/` の有無・既存の middleware / proxy・認証に合わせて書く。
 
-## 設定をアプリへ取り込む
+## 1. proxy（15以前は middleware）
 
-導入プロンプトが確定した非秘密の `apiOrigin`、`siteOrigin`、`productId`、`checkoutUrl` を、対象アプリの既存のサーバー環境変数方式で読む。購入ボタンは標準checkout URLへ接続し、購入者runtimeでは `createCustomerClient({ apiOrigin })` を使う。
+Cozeni から戻ったときの `cozeni_code` の交換と、無限リダイレクトを止める印の管理を SDK に任せる。
 
-商品登録helperが `.cozeni/setup-state.json` を完了状態で保存した場合は、対象アプリのcwdで次を実行する。
+- **Next.js 16**：プロジェクト直下（`src/` があればその中）に `proxy.ts` を作る。
 
-```sh
-node "$SKILL_DIR/scripts/configure-next.mjs" .cozeni/setup-state.json .env.local
+  ```ts
+  export { cozeniProxy as proxy } from "@nulogic/cozeni-sdk/next";
+
+  export const config = {
+    matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  };
+  ```
+
+- **Next.js 15**：同じ場所の `middleware.ts` に `export { cozeniProxy as middleware } from "@nulogic/cozeni-sdk/next";` と書く（`config` は同じ）。
+- `matcher` には、商品の `access_url`（購入後に表示するページ）を必ず含める。
+- **既存の middleware / proxy がある場合**は置き換えない。既存の関数の先頭と最後に次を組み込む。
+
+  ```ts
+  import { clearCozeniHandoff, handleCozeniHandoff } from "@nulogic/cozeni-sdk/next";
+
+  export async function proxy(request: NextRequest) {
+    const handoff = await handleCozeniHandoff(request);
+    if (handoff) return handoff;
+    const response = /* 既存の処理 */ NextResponse.next();
+    return clearCozeniHandoff(request, response);
+  }
+  ```
+
+## 2. 限定ページ
+
+ページ（Server Component）の最初で `requireEntitlement("<商品ID>")` を呼ぶ。権利が無ければ Cozeni の再入場画面へリダイレクトし、ハンドオフ直後などリダイレクトしてはいけない場合は `AccessDenied` を投げる。
+
+```tsx
+import { AccessDenied, requireEntitlement } from "@nulogic/cozeni-sdk/next";
+
+export const dynamic = "force-dynamic";
+
+export default async function Members() {
+  try {
+    await requireEntitlement("prd_...");
+  } catch (error) {
+    if (!(error instanceof AccessDenied)) throw error;
+    return <p>表示できません（{error.reason}）</p>;
+  }
+  return <main>…限定コンテンツ…</main>;
+}
 ```
 
-このscriptは `COZENI_API_ORIGIN`、`COZENI_SITE_ORIGIN`、`COZENI_PRODUCT_ID`、`COZENI_CHECKOUT_URL` だけを更新し、既存の認証・秘密設定を保持する。既存サイトの変数名が異なる場合は、同じ非秘密値をその方式へ対応付ける。設定中に他のプロセスから同じファイルを編集しない。
+- `catch` では `AccessDenied` だけを受ける。それ以外（Next.js の `redirect()` の例外）は必ず投げ直す。広い `try/catch` で包むとリダイレクトが効かない。
+- `error.reason` は `no_session`（未ログイン）・`no_grant`（未購入）・`revoked`（権利の取り消し）・`unavailable`（一時障害）。`unavailable` では「時間をおいて再試行」と案内し、限定コンテンツを出さない。
+- 認可の結果や限定コンテンツを静的生成・`unstable_cache` などリクエストをまたぐキャッシュに入れない。layout だけで守らず、各ページで呼ぶ。
 
-購入者の再入場先（メールアドレス入力画面）は、Cozeniの権利確認APIが拒否応答へ含める `enter_url` を `@nulogic/cozeni-sdk/next` がそのまま使う。クリエイター側で再入場URLを設定・構成する必要はなく、`COZENI_OTP_URL` 相当の環境変数も不要である。保護コンテンツを環境変数で扱う例では、`COZENI_PROTECTED_CONTENT` もサーバー専用とする。
+## 3. Route Handler と Server Action
 
-## App Routerの入口へ組み込む
+リダイレクトしない。`entitlement("<商品ID>")` の結果で分岐する。
 
-`@nulogic/cozeni-sdk/next`（サブパスexport）がcookies()の読み取りからenter_urlへの自動リダイレクトまで行う。共通SDK本体（`@nulogic/cozeni-sdk`）はフレームワーク非依存のまま、Next.js固有の処理だけがこちらに閉じている。
+```ts
+import { denialResponse, entitlement } from "@nulogic/cozeni-sdk/next";
 
-- **handoff Route Handler**: `cozeni_code` を受けるサーバー入口で `exchangeHandoff()` を一度だけ呼び、`customerCookie()` の値を `Set-Cookie` へ設定して、ハンドオフ成功直後を示す秘密を含まない印（`cozeni_handoff=1`）を付けたURLへ303で遷移する。成功応答とhandoff応答は共有キャッシュしない。
-- **Pageからhandoffへの転送**: `cozeni_code` をPageまたはRSCでhandoff Route Handlerへ渡すときは、設定URLの生成だけを `try/catch` し、`redirect(callback.href)` は必ず `catch` の外で実行する。Next.jsの `redirect()` は `NEXT_REDIRECT` をthrowする制御フローのため、広い `catch` で捕捉すると交換入口へ到達しない。`cozeni_code`が重複クエリ（`string[]`）で届いた場合も無効なコードとして扱う。実装は [`examples/nextjs/app/members/page.tsx`](../../../examples/nextjs/app/members/page.tsx) を正本にする。
-- **ページとRSC（リダイレクトするのはここだけ）**: `requireEntitlement({ apiOrigin, productId, haltRedirect })` を保護コンポーネントの構築・データ取得より先に呼ぶ。権利があれば何もせず戻り、権利が無くenter_urlが使えれば`redirect()`の制御フロー例外を投げて自動遷移する。この呼び出しは`AccessDenied`だけを捕捉し、それ以外（`redirect()`の例外を含む）は握りつぶさず上位へ伝播させる。layoutだけに依存しない。認可結果や保護データを静的生成、`unstable_cache`、リクエストをまたぐcacheへ保存しない。redirect()を使うのはこのpage入口だけで、Server ActionやRoute Handlerでは使わない。
-- **無限リダイレクトの回避（haltRedirect）**: ハンドオフのコード交換直後（`cozeni_code`を処理した直後のリクエスト、成功直後の`cozeni_handoff`付きリクエスト、または交換失敗で`cozeni_error`が付いたリクエスト）では`haltRedirect: true`を渡す。重複クエリで`string[]`になっていても「印がある」とみなす。この状態で拒否されると`requireEntitlement()`は再リダイレクトせず`AccessDenied`を投げるので、呼び出し側はサイト内の拒否表示に留める。`cozeni_handoff`付きで権利が確認できた場合は、印を外したURLへ`redirect()`で正規化する。
-- **データ取得・Server Action（redirectしない、denialResponse()も使わない）**: 各入口で独立に認可する。`nextEntitlement()`（redirectしない）や、上記の保護データ取得ヘルパーを再利用し、拒否は`AccessDenied`で受け取る。Server ActionはWeb Responseを返すべきではないため、`AccessDenied.reason`（または`nextEntitlement()`の結果）をそのままplain objectとして返し、呼び出し元のクライアントコンポーネントで表示を切り替える。実装は [`examples/nextjs/app/members/actions.ts`](../../../examples/nextjs/app/members/actions.ts) を正本にする。Server Actionの副作用には、購入者認可に加えて既存のCSRF / Origin検査を維持する。
-- **Route Handler（JSON API、redirectしない）**: リダイレクトせず、`denialResponse(entitlement, productId)`で401/403/503のJSONへ`enter_url`を含めて返す。`productId`は実際に問い合わせたIDを渡す（enter_urlのproduct_id一致検証に使う）。fetchの呼び出し元をHTMLへ飛ばさないため、Route Handlerの中では`redirect()`を呼ばない。
-- **Cookie操作とredirect**: `siteOrigin` はサーバー設定から固定し、受信したHostやforwarded headerから作らない。Cookie消去など通常ページのフォームには `Referrer-Policy: strict-origin` を使う。handoff応答の `no-referrer` は維持する。
-- **キャッシュ**: 保護ページ・保護API・handoff・Cookie操作の応答は `no-store` にし、静的JS / CSSのキャッシュは維持する。RSC要求を含む未認証応答に保護内容が入らないようにする。
+export async function GET() {
+  const result = await entitlement("prd_...");
+  if (!result.entitled) return denialResponse(result, "prd_...");
+  return Response.json({ /* 限定データ */ }, { headers: { "Cache-Control": "private, no-store" } });
+}
+```
 
-既存のログインCookieは置き換えず、SDKへは `cozeni_customer` だけを渡す。認可結果に応じた既存アプリの画面・エラー形式を保ちながら、保護内容または副作用を返さない分岐を各入口に実装する。
+- Route Handler（JSON）は `denialResponse()` で 401 / 403 / 503 を返す（`enter_url` は本文に入る）。
+- Server Action は Response を返さず、`{ ok: false, reason: result.reason }` のような plain object を返す。直接 POST されうるので、ページとは別に毎回 `entitlement()` を呼ぶ。
+
+## 4. 購入ボタン
+
+CLI が返した購入リンクを `<a>` で置くだけ。ルートも秘密も要らない。
+
+```tsx
+<a href="https://app.cozeni.net/checkout/...">購入する</a>
+```
+
+## 5. 環境変数
+
+| 変数 | 必要か |
+|---|---|
+| `COZENI_SITE_ORIGIN` | **必要**。自サイトのオリジン（ローカルと本番で値が違う）。`Host` ヘッダーから推測しない |
+| `COZENI_API_ORIGIN` | 不要（既定が本番）。Cozeni を手元で動かす開発時だけ |
+
+Next.js 15 の middleware は、リダイレクト先のループバックのホスト名（`127.0.0.1`）を `localhost` に書き換える。15 のローカル開発では `COZENI_SITE_ORIGIN` とブラウザで開くURLを `localhost` に揃える（`127.0.0.1` だと購入者の Cookie が届かない）。
+
+## 以前の版（0.3系）で導入したサイト
+
+`COZENI_PRODUCT_ID` などの環境変数と `requireEntitlement({ apiOrigin, productId, haltRedirect })`、handoff の Route Handler はそのまま動く。移行は必須ではない。移行する場合は、handoff と Cookie 消去のルート・ページ内の `cozeni_code` 転送と印の処理を削除し、上の 1〜4 に置き換える。

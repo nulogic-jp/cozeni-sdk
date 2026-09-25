@@ -1,15 +1,12 @@
-import { redirect } from "next/navigation";
-import {
-  AccessDenied,
-  protectedData,
-  reportServerError,
-  requireEntitlement,
-  siteUrl,
-} from "../../lib/cozeni";
+import { AccessDenied, requireEntitlement } from "@nulogic/cozeni-sdk/next";
+import { PROTECTED_CONTENT } from "../../lib/content";
+import { PRODUCT_ID } from "../../lib/cozeni";
 import { submitProtectedAction } from "./actions";
+
+// 認可結果をリクエストをまたいでキャッシュしない。
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
-function Denied({ reason }: { reason: string }) {
+
+function Denied({ reason }: { reason: AccessDenied["reason"] }) {
   return (
     <main>
       <h1>コンテンツを表示できません</h1>
@@ -25,87 +22,26 @@ function Denied({ reason }: { reason: string }) {
       <p>
         <a href="/members">再試行</a>
       </p>
-      <form action="/cozeni/clear" method="post">
-        <button type="submit">購入者Cookieを消去</button>
-      </form>
     </main>
   );
 }
-export default async function Members({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const query = await searchParams;
-  // 重複クエリ（string[]）はJavaScript例（web-handler.mjs）と同じ扱いで、
-  // 単一の非空文字列でなければ無効なコードとして扱う。
-  const codeValue = query.cozeni_code;
-  if (codeValue !== undefined) {
-    const valid = typeof codeValue === "string" && codeValue.length > 0;
-    let target: URL;
-    try {
-      target = siteUrl(valid ? "/cozeni/handoff" : "/members");
-    } catch (error) {
-      reportServerError(error, "購入者ページのコード転送");
-      return <Denied reason="unavailable" />;
-    }
-    if (valid) target.searchParams.set("cozeni_code", codeValue);
-    else target.searchParams.set("cozeni_error", "invalid_code");
-    redirect(target.href);
-  }
-  // ハンドオフ直後（cozeni_codeを処理した直後のハンドオフ成功で付く
-  // cozeni_handoff、または交換失敗で付くcozeni_error）は、重複クエリで
-  // string[]になっていても「印がある」とみなし、enter_urlがあっても
-  // 再リダイレクトせずここで留める（無限リダイレクトの回避）。
-  const haltRedirect =
-    query.cozeni_error !== undefined || query.cozeni_handoff !== undefined;
-  const cozeniError =
-    typeof query.cozeni_error === "string" ? query.cozeni_error : undefined;
+
+export default async function Members() {
   try {
-    await requireEntitlement(haltRedirect);
+    // 権利が無ければ再入場の画面へリダイレクトする。ハンドオフ直後はリダイレクトせず拒否に留める。
+    await requireEntitlement(PRODUCT_ID);
   } catch (error) {
-    // requireEntitlement()はenter_urlがあればredirect()の制御フロー例外を投げる。
-    // AccessDenied以外はここで握りつぶさず、そのまま上位へ伝播させる。
+    // redirect()の例外は握りつぶさずに投げ直す。AccessDeniedだけを拒否表示にする。
     if (!(error instanceof AccessDenied)) throw error;
-    reportServerError(error, "購入者ページ");
-    const reason =
-      error.reason === "no_session" && cozeniError === "unavailable"
-        ? "unavailable"
-        : error.reason;
-    return <Denied reason={reason} />;
+    return <Denied reason={error.reason} />;
   }
-  // ここに到達したら権利がある。ハンドオフ成功直後・交換失敗の印が付いていれば、
-  // 両方を外したクリーンなURLへ正規化する（アドレスバーに残さない）。
-  if (haltRedirect) {
-    let target: URL | undefined;
-    try {
-      target = siteUrl("/members");
-    } catch (error) {
-      reportServerError(error, "購入者ページの正規化");
-    }
-    if (target) redirect(target.href);
-  }
-  // pageの認可後に権利が失効しても、データ層でもう一度拒否する（redirectはしない）。
-  try {
-    const data = await protectedData();
-    return (
-      <main>
-        <h1>購入者限定ページ</h1>
-        <p data-testid="protected-content">{data.content}</p>
-        <form action={submitProtectedAction}>
-          <button type="submit">保護された操作を実行</button>
-        </form>
-        <form action="/cozeni/clear" method="post">
-          <button type="submit">購入者Cookieを消去</button>
-        </form>
-      </main>
-    );
-  } catch (error) {
-    reportServerError(error, "購入者ページ");
-    return (
-      <Denied
-        reason={error instanceof AccessDenied ? error.reason : "unavailable"}
-      />
-    );
-  }
+  return (
+    <main>
+      <h1>購入者限定ページ</h1>
+      <p data-testid="protected-content">{PROTECTED_CONTENT}</p>
+      <form action={submitProtectedAction}>
+        <button type="submit">保護された操作を実行</button>
+      </form>
+    </main>
+  );
 }
