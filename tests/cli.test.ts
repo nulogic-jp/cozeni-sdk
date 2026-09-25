@@ -1000,6 +1000,75 @@ describe("status", () => {
     });
     expect(data.warnings).toEqual([]);
   });
+  it("利用者にそのまま見せる次にやることを返す", async () => {
+    await saveLogin();
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json({
+            ...account,
+            sales: {
+              can_sell: false,
+              blockers: [
+                {
+                  code: "review_rejected",
+                  action_url: `${APP}/settings/review`,
+                  rejection: {
+                    reason_code: "other",
+                    note: "特商法の表記が不足",
+                  },
+                },
+                {
+                  code: "stripe_not_connected",
+                  action_url: `${APP}/settings/payouts`,
+                },
+              ],
+              warnings: [],
+            },
+          })
+        : json({ items: [], next_cursor: null }),
+    );
+    await t.run("status", "--json");
+    const data = t.parsed().data;
+    expect(data.message_for_user).toEqual([
+      "販売を始めるには、次の手続きが必要です。",
+      `1. 審査で差し戻されました。指摘を直して再申請してください（理由: 特商法の表記が不足）。 ${APP}/settings/review`,
+      `2. Stripeアカウントを接続してください。 ${APP}/settings/payouts`,
+    ]);
+    expect(data.next_step).toBe(
+      'npx @nulogic/cozeni-sdk products create --name "<商品名>" --price <円> --access-url "<URL>"',
+    );
+  });
+  it("販売できるなら「すぐ販売できます」と返す", async () => {
+    await saveLogin();
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json({
+            ...account,
+            sales: { can_sell: true, blockers: [], warnings: [] },
+          })
+        : json({ items: [product], next_cursor: null }),
+    );
+    const human = await t.run("status");
+    expect(human.out).toContain("すぐ販売できます");
+    await t.run("status", "--json");
+    expect(t.parsed().data).toMatchObject({
+      message_for_user: ["すぐ販売できます。"],
+      next_step: null,
+    });
+  });
+  it("販売状態が取れなければ、推測せず管理画面を案内する", async () => {
+    await saveLogin();
+    const { sales: _, ...legacy } = account;
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json(legacy)
+        : json({ items: [], next_cursor: null }),
+    );
+    await t.run("status", "--json");
+    expect(t.parsed().data.message_for_user).toEqual([
+      `販売できる状態かを確かめられませんでした。Cozeni の管理画面で確認してください。 ${APP}`,
+    ]);
+  });
   it("キーの期限まで7日を切ったらkey_expiringを返す", async () => {
     await saveLogin({ expires_at: "2026-09-30T00:00:00.000Z" });
     const t = cli((call) =>

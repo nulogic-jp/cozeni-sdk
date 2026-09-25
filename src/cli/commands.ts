@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   type Account,
+  type AccountSales,
   type CheckoutLink,
   CozeniError,
   type Product,
@@ -141,6 +142,7 @@ export async function status(
   const warnings: string[] = [];
   if (expiresAt && Date.parse(expiresAt) - context.now() < KEY_EXPIRING_MS)
     warnings.push("key_expiring");
+  const messageForUser = userMessages(sales, nextActions, session.appOrigin);
   const human = [
     `接続先: ${session.apiOrigin}（${account.environment}）`,
     `クリエイター: ${account.creator_id}`,
@@ -149,14 +151,8 @@ export async function status(
       : sales.can_sell
         ? "販売: できます。"
         : "販売: まだできません。",
+    ...messageForUser,
   ];
-  if (nextActions.length > 0) {
-    human.push("次にやること:");
-    for (const action of nextActions)
-      human.push(`- ${action.message} ${action.action_url}`);
-  }
-  if (sales?.warnings.includes("payouts_disabled"))
-    human.push("注意: 販売はできますが、売上の入金が停止しています。");
   human.push(`商品: ${products.length}件`);
   for (const product of products) human.push(productLine(product));
   if (expiresAt) human.push(`ログインの有効期限: ${expiresAt}`);
@@ -170,6 +166,7 @@ export async function status(
       api_origin: session.apiOrigin,
       environment: account.environment,
       creator_id: account.creator_id,
+      expected_creator_id: session.profile.expectedCreatorId ?? null,
       key: {
         id: account.api_key_id,
         source: session.source,
@@ -177,11 +174,47 @@ export async function status(
       },
       sales,
       next_actions: nextActions,
+      message_for_user: messageForUser,
       products,
       warnings,
+      next_step: products.some((product) => product.status === "active")
+        ? null
+        : `${CLI} products create --name "<商品名>" --price <円> --access-url "<URL>"${profileSuffix(session.profile)}`,
     },
     human,
   };
+}
+
+/** 利用者にそのまま見せられる「次にやること」。AI が言い換えずに伝えられるよう、ここで文を作る。 */
+function userMessages(
+  sales: AccountSales | null,
+  actions: {
+    message: string;
+    action_url: string;
+    rejection?: { note: string | null };
+  }[],
+  appOrigin: string | undefined,
+): string[] {
+  if (sales === null)
+    return [
+      `販売できる状態かを確かめられませんでした。Cozeni の管理画面で確認してください。${appOrigin ? ` ${appOrigin}` : ""}`,
+    ];
+  const lines: string[] = [];
+  if (actions.length > 0) {
+    lines.push("販売を始めるには、次の手続きが必要です。");
+    actions.forEach((action, index) => {
+      const note = action.rejection?.note;
+      const message = note
+        ? `${action.message.replace(/。$/, "")}（理由: ${note}）。`
+        : action.message;
+      lines.push(`${index + 1}. ${message} ${action.action_url}`);
+    });
+  } else if (sales.can_sell) lines.push("すぐ販売できます。");
+  if (sales.warnings.includes("payouts_disabled"))
+    lines.push(
+      "販売はできますが、売上の入金が止まっています。Stripe の登録内容を確認してください。",
+    );
+  return lines;
 }
 
 export async function listProducts(
