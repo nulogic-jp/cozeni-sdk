@@ -1,11 +1,12 @@
 // ログイン後に使う管理コマンド（whoami / status / products / link）。
 import { createHash, randomUUID } from "node:crypto";
-import type {
-  Account,
-  CheckoutLink,
-  Product,
-  SalesBlocker,
-  UpdateProduct,
+import {
+  type Account,
+  type CheckoutLink,
+  CozeniError,
+  type Product,
+  type SalesBlocker,
+  type UpdateProduct,
 } from "../index.js";
 import { isLoopback, record } from "../transport.js";
 import { CLI, convert, profileSuffix, type Session } from "./api.js";
@@ -189,7 +190,10 @@ export async function listProducts(
   };
 }
 
-function checkoutLink(link: CheckoutLink): CheckoutLink {
+function checkoutLink(
+  link: CheckoutLink,
+  options: { allowDisabled?: boolean } = {},
+): CheckoutLink {
   let url: URL | undefined;
   try {
     url = new URL(link.url);
@@ -207,7 +211,7 @@ function checkoutLink(link: CheckoutLink): CheckoutLink {
     url.password
   )
     throw new CliError("invalid_response", "購入リンクの形式が想定外です。");
-  if (link.disabled)
+  if (link.disabled && !options.allowDisabled)
     throw new CliError(
       "checkout_link_disabled",
       "この商品の購入リンクは無効になっています。",
@@ -218,6 +222,39 @@ function checkoutLink(link: CheckoutLink): CheckoutLink {
     product_id: link.product_id,
     url: url.href,
     disabled: link.disabled,
+  };
+}
+
+/** 商品1件と購入リンクを表示する。リンクは取得だけで、未発行でも発行しない（発行は link）。 */
+export async function getProduct(
+  session: Session,
+  context: CommandContext,
+  productId: string,
+): Promise<Output> {
+  const product = await call(session, context, () =>
+    session.client.products.get(productId),
+  );
+  const found = await call(session, context, async () => {
+    try {
+      return await session.client.checkoutLinks.get(productId);
+    } catch (error) {
+      if (
+        error instanceof CozeniError &&
+        error.code === "checkout_link_not_found"
+      )
+        return null;
+      throw error;
+    }
+  });
+  const result = found ? checkoutLink(found, { allowDisabled: true }) : null;
+  return {
+    data: { product, checkout_link: result },
+    human: [
+      productLine(product),
+      result === null
+        ? `購入リンク: 未発行（${CLI} link ${product.id} で発行できます）`
+        : `購入リンク: ${result.url}${result.disabled ? "（無効）" : ""}`,
+    ],
   };
 }
 

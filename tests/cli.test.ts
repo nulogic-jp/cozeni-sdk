@@ -830,6 +830,49 @@ describe("products", () => {
     expect((await t.run("link", "prd_x", "--json")).code).toBe(4);
     expect(t.parsed().error.code).toBe("not_found");
   });
+  it("getは商品と購入リンクを返す。リンクは取得だけで発行しない", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        "GET /products/prd_1/checkout-link": () => json(link),
+      }),
+    );
+    expect((await t.run("products", "get", "prd_1", "--json")).code).toBe(0);
+    expect(t.parsed().data).toEqual({
+      product,
+      checkout_link: {
+        id: "lnk_1",
+        product_id: "prd_1",
+        url: link.url,
+        disabled: false,
+      },
+    });
+    expect(t.calls.some((call) => call.method === "PUT")).toBe(false);
+  });
+  it("getは購入リンクが未発行でもエラーにせず、未発行と示す", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        "GET /products/prd_1/checkout-link": () =>
+          apiError("checkout_link_not_found", 404),
+      }),
+    );
+    const human = await t.run("products", "get", "prd_1");
+    expect(human.code).toBe(0);
+    expect(human.out).toContain("購入リンク: 未発行");
+    expect((await t.run("products", "get", "prd_1", "--json")).code).toBe(0);
+    expect(t.parsed().data.checkout_link).toBeNull();
+  });
+  it("getは存在しない商品をnot_foundで終了コード4にする", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        "GET /products/prd_x": () => apiError("product_not_found", 404),
+      }),
+    );
+    expect((await t.run("products", "get", "prd_x", "--json")).code).toBe(4);
+    expect(t.parsed().error.code).toBe("not_found");
+  });
   it("linkは標準の購入リンクを返す", async () => {
     await saveLogin();
     const t = cli(server());

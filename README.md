@@ -47,6 +47,7 @@ bin名は `cozeni` ですが、案内や自動化では **`npx @nulogic/cozeni-s
 | `whoami` | 接続先の環境・クリエイター・キーの期限を表示 |
 | `status` | 販売できる状態か（`sales`）、次にやること（`next_actions`）、商品一覧、キーの期限 |
 | `products list` | 商品一覧 |
+| `products get <商品ID>` | 商品1件と購入リンクの状態（取得だけで、リンクを発行しない） |
 | `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す |
 | `products update <商品ID> [--name] [--price] [--access-url]` | 商品を変更する |
 | `link <商品ID>` | 標準の購入リンクを取得する（無ければ発行） |

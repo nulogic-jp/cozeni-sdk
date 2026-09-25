@@ -7,6 +7,7 @@ import { CLI, resolveProfile, session } from "./api.js";
 import {
   type CommandContext,
   createProduct,
+  getProduct,
   link,
   listProducts,
   type Output,
@@ -54,6 +55,7 @@ const commands: Record<string, string[]> = {
   whoami: common,
   status: common,
   "products list": common,
+  "products get": common,
   "products create": [...common, "yes", "name", "price", "access-url"],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
@@ -70,6 +72,7 @@ const help = `Cozeni CLI ${version}
   whoami                    接続先・クリエイター・ログインの期限を表示
   status                    販売できる状態か、次にやること、商品一覧を表示
   products list             商品一覧
+  products get <商品ID>     商品1件と購入リンクの状態を表示（リンクは発行しない）
   products create --name <名前> --price <円> --access-url <URL>
                             商品を作成し、購入リンクを返す（確認が必要）
   products update <商品ID> [--name] [--price] [--access-url]
@@ -191,7 +194,8 @@ export async function run(context: CliContext): Promise<number> {
         `${name} では使えないオプションです: ${unexpected.map((key) => `--${key}`).join(" ")}`,
         { hint: `${CLI} --help で使い方を確認してください。` },
       );
-    const needsId = name === "products update" || name === "link";
+    const needsId =
+      name === "products get" || name === "products update" || name === "link";
     if (needsId ? args.length !== 1 : args.length !== 0)
       throw new CliError(
         "invalid_input",
@@ -282,11 +286,13 @@ export async function run(context: CliContext): Promise<number> {
           ? await status(current, commandContext)
           : name === "products list"
             ? await listProducts(current, commandContext)
-            : name === "products create"
-              ? await createProduct(current, commandContext, store, flags)
-              : name === "products update"
-                ? await updateProduct(current, commandContext, id, flags)
-                : await link(current, commandContext, id);
+            : name === "products get"
+              ? await getProduct(current, commandContext, id)
+              : name === "products create"
+                ? await createProduct(current, commandContext, store, flags)
+                : name === "products update"
+                  ? await updateProduct(current, commandContext, id, flags)
+                  : await link(current, commandContext, id);
     write(context, json, output);
     return 0;
   } catch (error) {

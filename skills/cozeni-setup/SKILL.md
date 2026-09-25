@@ -22,7 +22,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
    2. 利用者に「このURLをブラウザで開き、表示されたコードが `<user_code>` と同じか確かめてから許可してください」と伝え、許可したと返事があるまで待つ。
    3. `npx @nulogic/cozeni-sdk login --complete --json` を実行する。終了コード6（`authorization_pending`）なら、利用者に許可を確かめてから同じコマンドを打ち直す。終了コード3なら手順1からやり直す。
 3. `npx @nulogic/cozeni-sdk status --json` で接続先と販売状態を確かめる。`next_actions` があっても導入は続けてよい（最後に利用者へ伝える）。
-4. 商品を決める。既存の商品を使うなら `products list` の `id` と、`link <商品ID>` の `url` を使う。新しく作るなら、**商品名・価格（円）・購入後に表示するページのURL**を利用者に1回でまとめて確認してから、次を実行する。
+4. 商品を決める。既存の商品を使うなら `products list` の `id` と、`link <商品ID>` の `url` を使う（1件の内容と購入リンクの状態だけを見るなら `products get <商品ID>`）。新しく作るなら、**商品名・価格（円）・購入後に表示するページのURL**を利用者に1回でまとめて確認してから、次を実行する。
 
    ```sh
    npx @nulogic/cozeni-sdk products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
