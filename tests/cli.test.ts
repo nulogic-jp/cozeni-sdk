@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type CliContext, run } from "../src/cli/run.js";
+import { satisfies, skillRange } from "../src/cli/skill-version.js";
 import { createStore } from "../src/cli/store.js";
 
 const API = "https://api.cozeni.net";
@@ -803,6 +804,15 @@ describe("使い方と版の照合", () => {
     expect((await t.run("--help")).out).toContain("login");
     expect((await t.run("--version")).out.trim()).toBe(version);
     expect(t.calls).toHaveLength(0);
+  });
+  it("同梱のskillはこの版のSDKに対応している", async () => {
+    const skill = await readFile(
+      new URL("../skills/cozeni-setup/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    const range = skillRange(skill);
+    expect(range).toBeDefined();
+    expect(satisfies(version, range ?? "")).toBe(true);
   });
   it("skillの対応版とずれていれば警告だけ出して続ける", async () => {
     await mkdir(join(home, ".claude", "skills", "cozeni-setup"), {

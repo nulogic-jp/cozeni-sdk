@@ -1,51 +1,79 @@
 ---
 name: cozeni-setup
-description: Cozeni SDK（@nulogic/cozeni-sdk）を使う作業全般で使う。既存のJavaScript / TypeScriptサイトへの導入と購入者認可の実装、商品の作成・更新とチェックアウトリンクの発行、販売を始められるか・購入できる状態か・審査やStripe接続の状況の確認、購入できない原因の調査（inspectの sales）などを扱う。Next.js App Routerとその他のサーバー構成を判定し、対応する実装資料を案内する。
+description: Cozeni（@nulogic/cozeni-sdk）で有料コンテンツを販売する作業全般で使う。サイトへの購入ボタンと購入者限定ページの導入、商品の作成・価格や限定ページの変更、購入リンクの取得、「買えない」「もう売れる？」「審査は通った？」など販売状態の確認と原因の調査を扱う。
+license: MIT
+metadata:
+  cozeni-sdk-version: ">=0.4.0 <0.5.0"
 ---
 
-# Cozeni SDK
+# Cozeni
 
-このskillは、Cozeni導入プロンプトで定められた接続、商品、購入リンク、秘密管理、検証、引き継ぎの共通契約を前提にする。商品の作成・更新とチェックアウトリンクの発行は商品登録helper（`scripts/setup.mjs`）で行い、呼び出し方法は導入プロンプトに従う。ここでは、その契約を対象サイトのフレームワークへ組み込む方法と、導入後の販売可否の確認を扱う。
+Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の `@nulogic/cozeni-sdk/next`（Next.js）か共通の JS API を使う。
 
-## 構成を判定する
+- CLI は **`npx @nulogic/cozeni-sdk <コマンド> --json`** で呼ぶ。`npx cozeni` は使わない（別のパッケージが実行されうる）。
+- 出力は1行のJSON（成功は `{"ok":true,"data":…}`、失敗は `{"ok":false,"error":{"code","message","hint"}}`）。失敗したら `error.hint` に従う。
+- **困ったら、まず `npx @nulogic/cozeni-sdk status --json`。** 販売状態や原因を推測で答えない。
 
-対象アプリの `AGENT.md` / `AGENTS.md`、`package.json`、lockfile、アプリ配置、既存の認証・ルーティング・サーバー実行境界を確認する。モノレポでは、導入対象のアプリを特定する。
+## 導入の流れ
 
-- **Next.js App Router** を使う対象アプリは、[Next.js App Router](references/nextjs.md) に従う。
-- それ以外の **JavaScript / TypeScriptサーバー構成** は、[JavaScript / TypeScriptサーバー](references/javascript-server.md) に従う。
-- 静的SPAだけで限定コンテンツを保護する実装は成立しない。利用できるserverless function、Worker、SSRなどのサーバー境界が見つからない場合は、実装を止めて必要な構成を説明する。
+1. SDK を依存に入れる。対象サイトの package manager を使う（例：`npm i @nulogic/cozeni-sdk`）。
+2. ログインする（2段階）。
+   1. `npx @nulogic/cozeni-sdk login --json` を実行する。すぐに終わり、`verification_uri_complete`（無ければ `verification_uri`）と `user_code` を返す。
+   2. 利用者に「このURLをブラウザで開き、表示されたコードが `<user_code>` と同じか確かめてから許可してください」と伝え、許可したと返事があるまで待つ。
+   3. `npx @nulogic/cozeni-sdk login --complete --json` を実行する。終了コード6（`authorization_pending`）なら、利用者に許可を確かめてから同じコマンドを打ち直す。終了コード3なら手順1からやり直す。
+3. `npx @nulogic/cozeni-sdk status --json` で接続先と販売状態を確かめる。`next_actions` があっても導入は続けてよい（最後に利用者へ伝える）。
+4. 商品を決める。既存の商品を使うなら `products list` の `id` と、`link <商品ID>` の `url` を使う。新しく作るなら、**商品名・価格（円）・購入後に表示するページのURL**を利用者に1回でまとめて確認してから、次を実行する。
 
-既存の認証、middleware、ルーティングを置き換えず、判定した資料にある入口へ購入者認可を追加する。対象外のフレームワーク固有機能を推測して導入しない。
+   ```sh
+   npx @nulogic/cozeni-sdk products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
+   ```
 
-## 販売できる状態か確認するとき
+   出力の `product.id`（`prd_…`）と `checkout_link.url` をそのままコードに書く。環境変数にはしない。
+5. サイトのコードを書く。フレームワークに合わせて次の資料に従う。
+   - **Next.js（App Router）**：[references/nextjs.md](references/nextjs.md)
+   - **それ以外のJavaScript / TypeScriptサーバー**：[references/javascript-server.md](references/javascript-server.md)
+   - 静的ファイルだけのサイトでは限定ページを守れない。サーバーの処理（SSR・serverless function・Worker など）が無ければ、作業を止めて利用者に説明する。
+6. ローカルの環境変数に `COZENI_SITE_ORIGIN`（自サイトのオリジン。例：`http://localhost:3000`）を設定する。本番で必要な環境変数はこれだけ。
+7. 開発サーバーを起動し、購入していない状態で限定ページを開くと Cozeni の再入場画面（`enter_url`）へリダイレクトされることを確かめる（例：`curl -sI http://localhost:3000/members` の `Location`）。実際の購入は試さない。
+8. プロジェクトの `AGENTS.md`（無ければ `CLAUDE.md`）に、下の「AGENTS.md への案内」を追記する。
+9. 報告の先頭に「次にやること」を書く。本番環境に `COZENI_SITE_ORIGIN` を設定すること、`status` の `next_actions`（審査・Stripe の手続き）をそのまま伝える。
 
-「購入できない」「もう売れる？」「審査は通った？」「Stripeの接続は終わっている？」など、販売可否・審査・Stripe接続の状況を聞かれたら、まず商品登録helper（`scripts/setup.mjs`）の `inspect` コマンドを実行し、出力の `sales` を確認する。呼び出し方法（設定ファイルの場所やAPIキーの受け渡し）は導入プロンプトに従う。原因を推測で答えない。
+## 確認が必要な操作
 
-- `sales` が `null`: 使用中のCozeni APIが `sales` に対応していない旧バージョンである。「Cozeni API側が古く、販売可否を取得できません」と伝え、原因を推測しない。
-- `sales.can_sell` が `true`: アカウントとしては販売できる状態だと伝える。それでも購入できない場合は、アカウントではなく商品単位の問題を疑う。`inspect` の `products` で対象商品の `status` を確認し、チェックアウトリンクが無効になっていないかはCozeniの管理画面で確認するよう利用者へ伝える。APIキーを使うコードを書いて調べない。
-- `sales.can_sell` が `false`: `sales.blockers` の各項目を利用者へそのまま伝える。項目ごとの意味と利用者がすべき対応は次の表の通り。
-- `sales.warnings` に `payouts_disabled` が含まれる場合: 販売はできるが入金が停止している旨を追加で伝える。
+商品の作成、価格の変更、購入後に表示するページ（`access_url`）の変更は、`--yes` が無ければ実行されず `confirmation_required`（終了コード2）で止まる。`access_url` の変更は、既存の購入者全員にすぐ反映される。
 
-### blocker の code 一覧
+`--yes` は、利用者が内容に同意してから付ける。`confirmation_required` が返ったら、`error.message` と `error.details` を利用者に見せて確認する。名前だけの変更は確認なしで実行される。
 
-| code | 意味 | 利用者がすること |
+## 終了コード
+
+| コード | 意味 | すること |
 |---|---|---|
-| `review_not_submitted` | 審査未申請 | `action_url` から審査を申請する |
-| `review_pending` | 審査待ち | 審査完了を待つ（`action_url` で状況確認） |
-| `review_rejected` | 審査の差し戻し | `rejection.reason_code` と `rejection.note` の指摘を直し、`action_url` から再申請する |
-| `stripe_not_connected` | Stripe未接続 | `action_url` からStripeアカウントを接続する |
-| `stripe_onboarding_incomplete` | Stripeの登録未完了 | `action_url` からStripeのオンボーディングを完了する |
-| `stripe_verification_pending` | Stripeの本人確認待ち | Stripe側の確認完了を待つ（`action_url` で状況確認） |
+| 0 | 成功 | — |
+| 1 | 想定外のエラー | `error.message` を利用者に伝える |
+| 2 | 使い方の誤り・確認が必要 | 引数を直す。`confirmation_required` なら利用者に確認して `--yes` を付ける |
+| 3 | ログインが必要 | `login` からやり直す。`key_expired` は30日の期限切れで、異常ではない |
+| 4 | 権限・規約・状態で拒否 | `terms_consent_required` なら、利用者に管理画面で規約への同意を頼む |
+| 5 | 通信できない・一時障害 | `network_unreachable` なら `error.hint` のネットワーク許可の手順を利用者に伝える。`rate_limited` は `retry_after_seconds` 秒待って再実行する |
+| 6 | 承認待ち | 利用者の承認を待ち、`login --complete` を打ち直す |
 
-`review_rejected` のときだけ `rejection` が必須で入る。`rejection.reason_code` の意味は次の通り。
+## 販売状態の読み方（`status --json`）
 
-| reason_code | 意味 |
-|---|---|
-| `tokushoho_missing_contact` | 特定商取引法に基づく連絡先情報が不足している |
-| `tokushoho_unreachable` | 特定商取引法の連絡先に到達できない |
-| `website_unreachable` | 販売サイトに到達できない |
-| `description_insufficient` | 商品説明が不十分 |
-| `prohibited_content` | 禁止されているコンテンツを含む |
-| `other` | 上記以外（`note` を確認する） |
+- `data.sales.can_sell` が `true`：アカウントとしては販売できる。それでも買えないなら、`data.products` で対象商品の `status` を確かめる。
+- `data.next_actions`：販売を始めるまでに利用者がすること。各項目の `message` と `action_url` をそのまま伝える。`review_rejected` には `rejection.reason_code` と `rejection.note`（差し戻しの理由）が付く。
+- `data.sales.warnings` に `payouts_disabled`：販売はできるが、売上の入金が止まっている。
+- `data.sales` が `null`：接続先の API が販売状態の取得に対応していない。原因を推測しない。
+- `data.warnings` に `key_expiring`：ログインの期限（30日）が7日以内に切れる。`login` で更新する。
 
-`rejection.note`（`string | null`）に補足があれば、そのまま利用者へ伝える。
+## してはいけないこと
+
+- ログインで保存されたキー（`~/.config/cozeni/credentials.json`）を読まない。サイトのコード・`.env`・本番の環境変数にキーを書かない。本番のサイトはキーを使わない。
+- 商品IDや購入リンクを推測で書かない。CLI の出力を使う。
+- 利用者の同意なしに `--yes` を付けない。
+
+## AGENTS.md への案内
+
+```md
+## Cozeni
+購入・販売の設定や「買えない」などの問い合わせは、Cozeni の skill に従う。
+最初に `npx @nulogic/cozeni-sdk status` で販売状態を確認する。推測で答えない。
+```

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -23,13 +23,14 @@ const requiredFiles = [
   "dist/index.d.ts",
   "dist/next.js",
   "dist/next.d.ts",
+  "dist/transport.js",
+  "dist/cli/main.js",
+  "dist/cli/run.js",
   "README.md",
   "LICENSE",
   "skills/cozeni-setup/SKILL.md",
   "skills/cozeni-setup/references/javascript-server.md",
   "skills/cozeni-setup/references/nextjs.md",
-  "skills/cozeni-setup/scripts/setup.mjs",
-  "skills/cozeni-setup/scripts/configure-next.mjs",
   "examples/nextjs/app/page.tsx",
   "examples/nextjs/app/members/page.tsx",
   "examples/nextjs/app/members/actions.ts",
@@ -174,8 +175,47 @@ try {
     );
   }
 
+  // CLIは依存（server-only・next）を入れていない展開先でも、素のNodeで起動できる
+  // （`/next`を読み込まない）。npxで実行される入口とbinの対応も確かめる。
+  const manifest = JSON.parse(
+    await readFile(join(temporary, "package", "package.json"), "utf8"),
+  );
+  assert.equal(manifest.bin?.cozeni, "dist/cli/main.js");
+  const cli = join(temporary, "package", "dist/cli/main.js");
+  assert.ok(
+    (await readFile(cli, "utf8")).startsWith("#!/usr/bin/env node\n"),
+    "CLIの入口にshebangがありません。",
+  );
+  const home = join(temporary, "cli-home");
+  await mkdir(home);
+  const cliEnvironment = {
+    PATH: process.env.PATH,
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+  };
+  assert.equal(
+    execFileSync(process.execPath, [cli, "--version"], {
+      env: cliEnvironment,
+      encoding: "utf8",
+    }).trim(),
+    packed.version,
+  );
+  // 未ログインの状態で、通信せずに終了コード3とJSONの案内を返す。
+  let loginRequired;
+  try {
+    execFileSync(process.execPath, [cli, "whoami", "--json"], {
+      env: cliEnvironment,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    loginRequired = error;
+  }
+  assert.equal(loginRequired?.status, 3);
+  assert.equal(JSON.parse(loginRequired.stdout).error.code, "login_required");
+
   console.log(
-    `配布検証成功: ${packed.name}@${packed.version} / ${files.length}ファイル / SDK・skill・examples / 内部情報・秘密なし`,
+    `配布検証成功: ${packed.name}@${packed.version} / ${files.length}ファイル / SDK・CLI・skill・examples / 内部情報・秘密なし`,
   );
 } finally {
   await rm(temporary, { recursive: true, force: true });
