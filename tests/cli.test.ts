@@ -339,6 +339,16 @@ describe("login（2段階）", () => {
     expect(code).toBe(0);
     expect(t.parsed().data.warnings).toEqual(["previous_key_not_revoked"]);
   });
+  it("COZENI_API_KEYが設定されていれば、保存したキーより優先されると警告する", async () => {
+    const t = cli(
+      ({ path }) =>
+        path.endsWith("/cli/device-codes") ? json(deviceCode) : json(token),
+      { env: { COZENI_API_KEY: "cozeni_env_secret" } },
+    );
+    await t.run("login", "--json");
+    expect((await t.run("login", "--complete", "--json")).code).toBe(0);
+    expect(t.parsed().data.warnings).toEqual(["env_key_takes_precedence"]);
+  });
   it("待ち状態が無ければログインから始めるよう案内する", async () => {
     const t = cli(() => json({}));
     expect((await t.run("login", "--complete", "--json")).code).toBe(3);

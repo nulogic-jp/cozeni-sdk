@@ -322,6 +322,10 @@ function loginOutput(
     human.push(
       "注意: 前のログインのキーを失効できませんでした。30日で自動的に無効になります。",
     );
+  if (result.warnings.includes("env_key_takes_precedence"))
+    human.push(
+      "注意: 環境変数 COZENI_API_KEY が設定されているため、以後のコマンドはそちらのキーを使います。ログインしたキーを使うには環境変数から外してください。",
+    );
   return { data: { ...result }, human };
 }
 

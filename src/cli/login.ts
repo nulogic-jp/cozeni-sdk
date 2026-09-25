@@ -366,6 +366,9 @@ export async function completeLogin(
     const revoked = await revoke(context, profile, previous);
     if (!revoked) warnings.push("previous_key_not_revoked");
   }
+  // 環境変数のキーは保存したキーより優先されるため、ログインしても使われないことを知らせる。
+  if (context.env.COZENI_API_KEY?.trim())
+    warnings.push("env_key_takes_precedence");
   return {
     profile: profile.name,
     api_origin: credential.api_origin,
