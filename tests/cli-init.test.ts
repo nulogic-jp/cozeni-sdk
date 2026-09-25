@@ -44,6 +44,7 @@ function cli(
       command: string,
       args: string[],
       cwd: string,
+      env: Record<string, string | undefined>,
     ) => Promise<{ code: number | null; error?: string }>;
   } = {},
 ) {
@@ -122,6 +123,7 @@ describe("init", () => {
       "npm",
       ["install", "--save-exact", `@nulogic/cozeni-sdk@${version}`],
       project,
+      expect.any(Object),
     );
     const data = t.parsed().data;
     expect(data).toMatchObject({
@@ -164,6 +166,7 @@ describe("init", () => {
       command,
       [...args, `@nulogic/cozeni-sdk@${version}`],
       project,
+      expect.any(Object),
     );
     expect(t.parsed().data.package_manager).toBe(command);
   });
@@ -178,6 +181,7 @@ describe("init", () => {
       "pnpm",
       expect.any(Array),
       project,
+      expect.any(Object),
     );
     await lstat(join(project, ".agents/skills/cozeni-setup/SKILL.md"));
   });
@@ -190,7 +194,12 @@ describe("init", () => {
     expect((await t.run("init", "--creator", "cre_abc", "--json")).code).toBe(
       0,
     );
-    expect(t.runCommand).toHaveBeenCalledWith("bun", expect.any(Array), app);
+    expect(t.runCommand).toHaveBeenCalledWith(
+      "bun",
+      expect.any(Array),
+      app,
+      expect.any(Object),
+    );
   });
   it("package.jsonが無ければinvalid_inputで、何もしない", async () => {
     const empty = join(temporary, "empty");
@@ -364,7 +373,14 @@ describe("init", () => {
       "http://localhost:5173",
       "--json",
     );
-    await t.run("init", "--creator", "cre_abc", "--json");
+    await t.run(
+      "init",
+      "--creator",
+      "cre_abc",
+      "--profile",
+      "production",
+      "--json",
+    );
     const config = await createStore({ XDG_CONFIG_HOME: home }).loadConfig();
     expect(config.default_profile).toBe("production");
     expect(config.profiles.dev?.expected_creator_id).toBe("cre_dev");
@@ -397,5 +413,127 @@ describe("init", () => {
     expect(code).toBe(0);
     expect(out).toContain("npx @nulogic/cozeni-sdk login");
     expect(out).toContain("cre_abc");
+  });
+
+  const devArgs = [
+    "--profile",
+    "dev",
+    "--api-origin",
+    "http://localhost:8787",
+    "--app-origin",
+    "http://localhost:5173",
+  ];
+  it("--profileを省略した再実行では、既定のプロファイルを引き継ぐ", async () => {
+    const t = cli();
+    await t.run("init", "--creator", "cre_dev", ...devArgs, "--json");
+    expect((await t.run("init", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "dev",
+      api_origin: "http://localhost:8787",
+      expected_creator_id: "cre_dev",
+    });
+    const config = await createStore({ XDG_CONFIG_HOME: home }).loadConfig();
+    expect(config.default_profile).toBe("dev");
+    expect(config.profiles.dev).toEqual({
+      expected_creator_id: "cre_dev",
+      api_origin: "http://localhost:8787",
+      app_origin: "http://localhost:5173",
+    });
+  });
+  it("保存済みのカスタムプロファイルは--profileだけで再初期化でき、接続先を再要求しない", async () => {
+    const t = cli();
+    await t.run("init", "--creator", "cre_dev", ...devArgs, "--json");
+    await t.run(
+      "init",
+      "--creator",
+      "cre_abc",
+      "--profile",
+      "production",
+      "--json",
+    );
+    expect((await t.run("init", "--profile", "dev", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "dev",
+      api_origin: "http://localhost:8787",
+      app_origin: "http://localhost:5173",
+    });
+    expect(
+      (await createStore({ XDG_CONFIG_HOME: home }).loadConfig())
+        .default_profile,
+    ).toBe("dev");
+  });
+  it("package managerにCozeniの秘密を渡さず、package managerの認証設定は渡す", async () => {
+    const t = cli({
+      env: {
+        COZENI_API_KEY: "cozeni_env_secret",
+        COZENI_API_ORIGIN: "https://api.cozeni.net",
+        NPM_TOKEN: "npm_user_token",
+        PATH: "/usr/bin",
+      },
+    });
+    expect((await t.run("init", "--creator", "cre_abc", "--json")).code).toBe(
+      0,
+    );
+    const env = t.runCommand.mock.calls[0]?.[3] as Record<string, string>;
+    expect(Object.keys(env).filter((key) => key.startsWith("COZENI_"))).toEqual(
+      [],
+    );
+    expect(env.NPM_TOKEN).toBe("npm_user_token");
+    expect(env.PATH).toBe("/usr/bin");
+  });
+  it("package.jsonのpackageManagerをlockfileより優先する", async () => {
+    await writeFile(
+      join(project, "package.json"),
+      JSON.stringify({ name: "site", packageManager: "pnpm@9.1.0" }),
+    );
+    const t = cli();
+    expect((await t.run("init", "--creator", "cre_abc", "--json")).code).toBe(
+      0,
+    );
+    expect(t.runCommand.mock.calls[0]?.[0]).toBe("pnpm");
+    expect(t.parsed().data.package_manager).toBe("pnpm");
+  });
+  it("packageManagerとlockfileが矛盾すれば、選ばずにpackage_manager_conflictで止める", async () => {
+    await writeFile(
+      join(project, "package.json"),
+      JSON.stringify({ name: "site", packageManager: "pnpm@9.1.0" }),
+    );
+    await writeFile(join(project, "yarn.lock"), "");
+    const t = cli();
+    expect((await t.run("init", "--creator", "cre_abc", "--json")).code).toBe(
+      1,
+    );
+    const error = t.parsed().error;
+    expect(error.code).toBe("package_manager_conflict");
+    expect(error.message).toContain("pnpm");
+    expect(error.message).toContain("yarn");
+    expect(t.runCommand).not.toHaveBeenCalled();
+    await expect(lstat(join(project, ".agents"))).rejects.toThrow();
+  });
+  it.each([".agents", ".agents/skills", ".claude", ".claude/skills"])(
+    "配置先の途中の%sがシンボリックリンクなら、書き込まずにunsafe_pathで止める",
+    async (link) => {
+      const outside = join(temporary, "outside");
+      await mkdir(outside);
+      const parent = join(project, link, "..");
+      await mkdir(parent, { recursive: true });
+      await symlink(outside, join(project, link));
+      const t = cli({ env: { CLAUDECODE: "1" } });
+      const { code } = await t.run("init", "--creator", "cre_abc", "--json");
+      expect(code).toBe(1);
+      expect(t.parsed().error.code).toBe("unsafe_path");
+      expect(await readdir(outside)).toEqual([]);
+      await expect(
+        lstat(join(home, "cozeni", "config.json")),
+      ).rejects.toThrow();
+    },
+  );
+  it("配置先の途中がディレクトリでなければunsafe_pathで止める", async () => {
+    await writeFile(join(project, ".agents"), "");
+    const t = cli();
+    expect((await t.run("init", "--creator", "cre_abc", "--json")).code).toBe(
+      1,
+    );
+    expect(t.parsed().error.code).toBe("unsafe_path");
   });
 });

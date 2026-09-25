@@ -10,11 +10,12 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   unlink,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLI, resolveProfile } from "./api.js";
 import type { Output } from "./commands.js";
@@ -28,6 +29,7 @@ export type RunCommand = (
   command: string,
   args: string[],
   cwd: string,
+  env: Record<string, string | undefined>,
 ) => Promise<{ code: number | null; error?: string }>;
 
 export interface InitContext {
@@ -113,13 +115,44 @@ async function upward(root: string): Promise<string[]> {
   }
 }
 
+const managers: PackageManager[] = ["bun", "pnpm", "yarn", "npm"];
+
+/**
+ * package.json の packageManager（例 "pnpm@9.1.0"）を lockfile より優先する。
+ * 両方あって食い違えば、どちらが正しいか決められないため選ばずに止める。
+ */
 async function detectPackageManager(
   directories: string[],
 ): Promise<PackageManager> {
-  for (const directory of directories)
+  let declared: PackageManager | undefined;
+  for (const directory of directories) {
+    const manifest = await readJsonFile(join(directory, "package.json"));
+    const field =
+      typeof manifest === "object" && manifest !== null
+        ? (manifest as { packageManager?: unknown }).packageManager
+        : undefined;
+    if (typeof field !== "string") continue;
+    const name = field.split("@")[0] as PackageManager;
+    if (managers.includes(name)) declared = name;
+    break;
+  }
+  let locked: { manager: PackageManager; file: string } | undefined;
+  search: for (const directory of directories)
     for (const [file, manager] of lockfiles)
-      if (await exists(join(directory, file))) return manager;
-  return "npm";
+      if (await exists(join(directory, file))) {
+        locked = { manager, file };
+        break search;
+      }
+  if (declared && locked && declared !== locked.manager)
+    throw new CliError(
+      "package_manager_conflict",
+      `package.json の packageManager は ${declared} ですが、lockfile（${locked.file}）は ${locked.manager} のものです。どちらで SDK を入れるか決められません。`,
+      {
+        hint: `このプロジェクトで使っている package manager を利用者に確かめ、packageManager か lockfile のどちらかに揃えてから、同じコマンドを再実行してください。`,
+        details: { declared, lockfile: locked.file },
+      },
+    );
+  return declared ?? locked?.manager ?? "npm";
 }
 
 /** 依存に書かれ、node_modules にこの版が入っていれば、入れ直さない。 */
@@ -149,6 +182,20 @@ async function alreadyInstalled(
   return false;
 }
 
+/**
+ * package manager に渡す環境。Cozeni の変数（COZENI_API_KEY など）は、lifecycle script を
+ * 含む子プロセスへ漏らさないよう外す。npm のトークン等は利用者の設定なので残す。
+ */
+export function childEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([key]) => !key.toUpperCase().startsWith("COZENI_"),
+    ),
+  );
+}
+
 async function install(
   context: InitContext,
   root: string,
@@ -158,7 +205,12 @@ async function install(
   const command = [manager, ...args].join(" ");
   let result: Awaited<ReturnType<RunCommand>>;
   try {
-    result = await context.runCommand(manager, args, root);
+    result = await context.runCommand(
+      manager,
+      args,
+      root,
+      childEnvironment(context.env),
+    );
   } catch {
     result = { code: null, error: "spawn_failed" };
   }
@@ -214,15 +266,62 @@ function sameTree(a: Map<string, Buffer>, b: Map<string, Buffer>): boolean {
 
 type SkillStatus = "created" | "updated" | "unchanged";
 
+function unsafePath(path: string, reason: string): CliError {
+  return new CliError(
+    "unsafe_path",
+    `skill の置き場所 ${path} が安全ではないため、書き込みを中止しました（${reason}）。`,
+    {
+      hint: `${path} を確認し、シンボリックリンクなら通常のディレクトリに置き換えてから、同じコマンドを再実行してください。`,
+    },
+  );
+}
+
+/**
+ * 配置先までの途中のディレクトリ（.agents・.agents/skills など）がシンボリックリンクや
+ * ディレクトリ以外でないこと、実体がプロジェクトのルートの中にあることを確かめる。
+ * 配置先そのもの（cozeni-setup）は置き換えの対象なので、ここでは見ない。
+ */
+async function checkTarget(root: string, path: string): Promise<void> {
+  const parts = path.split("/").slice(0, -1);
+  for (let index = 1; index <= parts.length; index++) {
+    const partial = parts.slice(0, index).join("/");
+    let stats: Awaited<ReturnType<typeof lstat>>;
+    try {
+      stats = await lstat(join(root, ...parts.slice(0, index)));
+    } catch {
+      return; // ここから先はまだ無い（作る）。
+    }
+    if (stats.isSymbolicLink())
+      throw unsafePath(partial, "シンボリックリンクです");
+    if (!stats.isDirectory())
+      throw unsafePath(partial, "ディレクトリではありません");
+  }
+}
+async function checkInsideRoot(root: string, directory: string, path: string) {
+  const [realRoot, realDirectory] = await Promise.all([
+    realpath(root),
+    realpath(directory),
+  ]);
+  const inside = relative(realRoot, realDirectory);
+  if (inside.startsWith("..") || isAbsolute(inside))
+    throw unsafePath(path, "プロジェクトの外にあります");
+}
+
 /** 一時ディレクトリに書いてから差し替える。途中で失敗しても、既存の skill を壊さない。 */
 async function placeSkill(
   source: Map<string, Buffer>,
-  target: string,
+  root: string,
+  path: string,
 ): Promise<SkillStatus> {
+  const target = join(root, ...path.split("/"));
+  await checkTarget(root, path);
   const current = await readTree(target);
   if (current && sameTree(current, source)) return "unchanged";
   const parent = dirname(target);
   await mkdir(parent, { recursive: true });
+  // 作成と検査の間に差し替えられていないか、作ったあとで確かめ直す。
+  await checkTarget(root, path);
+  await checkInsideRoot(root, parent, path);
   const id = randomUUID();
   const temporary = join(parent, `.cozeni-setup-${id}.tmp`);
   const backup = join(parent, `.cozeni-setup-${id}.old`);
@@ -254,22 +353,28 @@ async function placeSkill(
   }
 }
 
-async function copySkills(
+async function skillTargets(
   context: InitContext,
   root: string,
+): Promise<string[]> {
+  const targets = [".agents/skills/cozeni-setup"];
+  if (context.env.CLAUDECODE || (await exists(join(root, ".claude"))))
+    targets.push(".claude/skills/cozeni-setup");
+  // install などで何かを変える前に、置き場所の安全を確かめる。
+  for (const path of targets) await checkTarget(root, path);
+  return targets;
+}
+
+async function copySkills(
+  root: string,
+  targets: string[],
 ): Promise<{ path: string; status: SkillStatus }[]> {
   const source = await readTree(skillSource);
   if (!source?.has("SKILL.md"))
     throw new CliError("internal", "同梱の skill が見つかりません。");
-  const targets = [".agents/skills/cozeni-setup"];
-  if (context.env.CLAUDECODE || (await exists(join(root, ".claude"))))
-    targets.push(".claude/skills/cozeni-setup");
   const results: { path: string; status: SkillStatus }[] = [];
   for (const path of targets)
-    results.push({
-      path,
-      status: await placeSkill(source, join(root, ...path.split("/"))),
-    });
+    results.push({ path, status: await placeSkill(source, root, path) });
   return results;
 }
 
@@ -278,12 +383,16 @@ export async function init(
   store: Store,
   options: InitOptions,
 ): Promise<Output> {
-  const name = options.profile ?? "production";
-  const profile = resolveProfile({ ...options, profile: name }, context.env, {
-    version: 1,
-    profiles: {},
-  });
-  if (!profile.production && (!options["api-origin"] || !options["app-origin"]))
+  // 再実行で既定を変えないよう、--profile が無ければ今の既定を引き継ぐ。
+  const config = await store.loadConfig();
+  const name = options.profile ?? config.default_profile ?? "production";
+  // production 以外の接続先は、指定が無ければ保存済みの値を使う。
+  const profile = resolveProfile(
+    { ...options, profile: name },
+    context.env,
+    config,
+  );
+  if (!profile.production && (!profile.apiOrigin || !profile.appOrigin))
     throw new CliError(
       "invalid_input",
       `プロファイル ${name} の接続先が指定されていません。`,
@@ -291,7 +400,6 @@ export async function init(
         hint: "--api-origin と --app-origin で、APIと管理画面のオリジンを指定してください。",
       },
     );
-  const config = await store.loadConfig();
   const saved = Object.hasOwn(config.profiles, name)
     ? config.profiles[name]
     : undefined;
@@ -305,13 +413,14 @@ export async function init(
   const root = await findRoot(context.cwd);
   const directories = await upward(root);
   const manager = await detectPackageManager(directories);
+  const targets = await skillTargets(context, root);
   const installed = !(await alreadyInstalled(
     root,
     directories,
     context.version,
   ));
   if (installed) await install(context, root, manager);
-  const skills = await copySkills(context, root);
+  const skills = await copySkills(root, targets);
 
   config.default_profile = name;
   config.profiles[name] = {
