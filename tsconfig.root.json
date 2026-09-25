@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "module": "NodeNext", "moduleResolution": "NodeNext" },
-  "include": ["src/index.ts"]
+  "include": ["src/index.ts", "src/cli/**/*.ts"]
 }
