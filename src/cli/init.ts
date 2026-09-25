@@ -207,7 +207,7 @@ function sameTree(a: Map<string, Buffer>, b: Map<string, Buffer>): boolean {
   if (a.size !== b.size) return false;
   for (const [path, content] of a) {
     const other = b.get(path);
-    if (!other || !other.equals(content)) return false;
+    if (!other?.equals(content)) return false;
   }
   return true;
 }

@@ -231,15 +231,20 @@ function checkoutLink(
   };
 }
 
-/** 商品1件と購入リンクを表示する。リンクは取得だけで、未発行でも発行しない（発行は link）。 */
-export async function getProduct(
+function sameUrl(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return a === b;
+  }
+}
+
+/** 発行済みの購入リンクを取得する。未発行なら null（発行はしない）。 */
+async function existingLink(
   session: Session,
   context: CommandContext,
   productId: string,
-): Promise<Output> {
-  const product = await call(session, context, () =>
-    session.client.products.get(productId),
-  );
+): Promise<CheckoutLink | null> {
   const found = await call(session, context, async () => {
     try {
       return await session.client.checkoutLinks.get(productId);
@@ -252,9 +257,28 @@ export async function getProduct(
       throw error;
     }
   });
-  const result = found ? checkoutLink(found, { allowDisabled: true }) : null;
+  return found ? checkoutLink(found, { allowDisabled: true }) : null;
+}
+
+/** 商品1件と購入リンクを表示する。リンクは取得だけで、未発行でも発行しない（発行は link）。 */
+export async function getProduct(
+  session: Session,
+  context: CommandContext,
+  productId: string,
+): Promise<Output> {
+  const product = await call(session, context, () =>
+    session.client.products.get(productId),
+  );
+  const result = await existingLink(session, context, product.id);
   return {
-    data: { product, checkout_link: result },
+    data: {
+      product,
+      checkout_link: result,
+      next_step:
+        result === null
+          ? `${CLI} link ${product.id}${profileSuffix(session.profile)}`
+          : null,
+    },
     human: [
       productLine(product),
       result === null
@@ -284,6 +308,7 @@ export interface ProductInput {
   name?: string;
   price?: string;
   "access-url"?: string;
+  "allow-duplicate"?: boolean;
 }
 // サーバーが受け付ける価格の範囲（円）。
 const MIN_PRICE = 50;
@@ -343,6 +368,39 @@ export async function createProduct(
     price_jpy: parsePrice(input.price),
     access_url: parseAccessUrl(input["access-url"]),
   };
+  // 導入のやり直しで同じ商品が増えないよう、作る前に同じ内容の有効な商品を探す。
+  // 見つかれば作らず（確認も要らない）、それを返す。購入リンクは取得だけで、発行しない。
+  if (!input["allow-duplicate"]) {
+    const same = (await allProducts(session, context)).find(
+      (item) =>
+        item.status === "active" &&
+        item.name === product.name &&
+        item.price_jpy === product.price_jpy &&
+        sameUrl(item.access_url, product.access_url),
+    );
+    if (same) {
+      const found = await existingLink(session, context, same.id);
+      return {
+        data: {
+          product: same,
+          checkout_link: found,
+          reused: true,
+          reason: "same_product_exists",
+          next_step: found
+            ? null
+            : `${CLI} link ${same.id}${profileSuffix(session.profile)}`,
+        },
+        human: [
+          `同じ内容の商品がすでにあるため、新しく作らずにその商品を返しました: ${same.name}（${yen(same.price_jpy)}）`,
+          `商品ID: ${same.id}`,
+          found
+            ? `購入リンク: ${found.url}${found.disabled ? "（無効）" : ""}`
+            : `購入リンク: 未発行（${CLI} link ${same.id} で発行できます）`,
+          "別の商品として作るには --allow-duplicate を付けます。",
+        ],
+      };
+    }
+  }
   await context.confirm(
     `商品「${product.name}」を ${yen(product.price_jpy)} で作成します。購入後に表示するページ: ${product.access_url}`,
     { action: "create", product },
@@ -364,21 +422,30 @@ export async function createProduct(
     .digest("hex");
   const pendingName = `idem-${hash}`;
   const saved = await store.loadPending(pendingName);
-  let idempotencyKey: string;
-  let reused = false;
-  if (
+  // --allow-duplicate は別の商品を作る意図なので、作成済みのキーは使い回さない
+  // （未完了のキーは、タイムアウト後の再実行のために使い回す）。
+  const usable =
     record(saved) &&
     typeof saved.idempotency_key === "string" &&
-    /^[\x21-\x7E]{1,128}$/.test(saved.idempotency_key)
-  ) {
-    idempotencyKey = saved.idempotency_key;
+    /^[\x21-\x7E]{1,128}$/.test(saved.idempotency_key) &&
+    !(input["allow-duplicate"] && typeof saved.completed_at === "string");
+  let idempotencyKey: string;
+  let createdAt: string;
+  let reused = false;
+  if (usable) {
+    idempotencyKey = saved.idempotency_key as string;
+    createdAt =
+      typeof saved.created_at === "string"
+        ? saved.created_at
+        : new Date(context.now()).toISOString();
     reused = typeof saved.completed_at === "string";
   } else {
     idempotencyKey = randomUUID();
+    createdAt = new Date(context.now()).toISOString();
     await store.savePending(pendingName, {
       version: 1,
       idempotency_key: idempotencyKey,
-      created_at: new Date(context.now()).toISOString(),
+      created_at: createdAt,
       expires_at: new Date(context.now() + IDEMPOTENCY_TTL_MS).toISOString(),
     });
   }
@@ -394,16 +461,19 @@ export async function createProduct(
   await store.savePending(pendingName, {
     version: 1,
     idempotency_key: idempotencyKey,
-    created_at:
-      record(saved) && typeof saved.created_at === "string"
-        ? saved.created_at
-        : new Date(context.now()).toISOString(),
+    created_at: createdAt,
     completed_at: new Date(context.now()).toISOString(),
     product_id: created.id,
     expires_at: new Date(context.now() + IDEMPOTENCY_TTL_MS).toISOString(),
   });
   return {
-    data: { product: created, checkout_link: result, reused },
+    data: {
+      product: created,
+      checkout_link: result,
+      reused,
+      ...(reused ? { reason: "idempotent_retry" } : {}),
+      next_step: null,
+    },
     human: [
       reused
         ? `同じ内容の商品を作成済みのため、その商品を返しました: ${created.name}（${yen(created.price_jpy)}）`

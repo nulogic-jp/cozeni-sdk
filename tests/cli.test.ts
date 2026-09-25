@@ -614,8 +614,9 @@ describe("products", () => {
       if (key === "PATCH /products/prd_1")
         return json({ ...product, ...(call.body as object) });
       if (key === "PUT /products/prd_1/checkout-link") return json(link);
+      // 既定では商品が無い（作成の前の重複確認に掛からない）。
       if (key.startsWith("GET /products"))
-        return json({ items: [product], next_cursor: null });
+        return json({ items: [], next_cursor: null });
       return json({}, 404);
     };
   const createArgs = [
@@ -753,6 +754,84 @@ describe("products", () => {
       .map((call) => call.headers.get("Idempotency-Key"));
     expect(keys[0]).toBe(keys[1]);
   });
+  const existing = {
+    "GET /products?limit=100": () =>
+      json({ items: [product], next_cursor: null }),
+  };
+  it("同じ名前・価格・access_urlの有効な商品があれば、確認なしで作らずにそれを返す", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        ...existing,
+        "GET /products/prd_1/checkout-link": () => json(link),
+      }),
+    );
+    expect((await t.run(...createArgs, "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      product: { id: "prd_1" },
+      checkout_link: { url: link.url },
+      reused: true,
+      reason: "same_product_exists",
+      next_step: null,
+    });
+    expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+  it("既存の商品の購入リンクが未発行なら発行せず、linkを案内する", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        ...existing,
+        "GET /products/prd_1/checkout-link": () =>
+          apiError("checkout_link_not_found", 404),
+      }),
+    );
+    expect((await t.run(...createArgs, "--yes", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      checkout_link: null,
+      reused: true,
+      next_step: "npx @nulogic/cozeni-sdk link prd_1",
+    });
+    expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+  it("アーカイブ済みや内容の違う商品は重複とみなさない", async () => {
+    await saveLogin();
+    const t = cli(
+      server({
+        "GET /products?limit=100": () =>
+          json({
+            items: [
+              { ...product, id: "prd_a", status: "archived" },
+              { ...product, id: "prd_b", price_jpy: 2000 },
+              { ...product, id: "prd_c", access_url: "https://site.example/x" },
+            ],
+            next_cursor: null,
+          }),
+      }),
+    );
+    expect((await t.run(...createArgs, "--yes", "--json")).code).toBe(0);
+    expect(t.calls.some((call) => call.method === "POST")).toBe(true);
+    expect(t.parsed().data.reused).toBe(false);
+  });
+  it("--allow-duplicateなら同じ内容でも新しく作り、作成済みの冪等キーを使い回さない", async () => {
+    await saveLogin();
+    const t = cli(server());
+    await t.run(...createArgs, "--yes", "--json");
+    const second = cli(server(existing));
+    expect(
+      (await second.run(...createArgs, "--allow-duplicate", "--json")).code,
+    ).toBe(2);
+    expect(second.parsed().error.code).toBe("confirmation_required");
+    expect(
+      (await second.run(...createArgs, "--allow-duplicate", "--yes", "--json"))
+        .code,
+    ).toBe(0);
+    expect(second.parsed().data.reused).toBe(false);
+    const keys = [...t.calls, ...second.calls]
+      .filter((call) => call.method === "POST")
+      .map((call) => call.headers.get("Idempotency-Key"));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
   it("TTYでは確認を求め、承諾したときだけ作成する", async () => {
     await saveLogin();
     const declined = cli(server(), { tty: true, answer: "n" });
@@ -849,6 +928,7 @@ describe("products", () => {
         url: link.url,
         disabled: false,
       },
+      next_step: null,
     });
     expect(t.calls.some((call) => call.method === "PUT")).toBe(false);
   });
@@ -864,7 +944,10 @@ describe("products", () => {
     expect(human.code).toBe(0);
     expect(human.out).toContain("購入リンク: 未発行");
     expect((await t.run("products", "get", "prd_1", "--json")).code).toBe(0);
-    expect(t.parsed().data.checkout_link).toBeNull();
+    expect(t.parsed().data).toMatchObject({
+      checkout_link: null,
+      next_step: "npx @nulogic/cozeni-sdk link prd_1",
+    });
   });
   it("getは存在しない商品をnot_foundで終了コード4にする", async () => {
     await saveLogin();
