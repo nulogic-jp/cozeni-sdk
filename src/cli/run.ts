@@ -18,6 +18,7 @@ import {
 } from "./commands.js";
 import { isInteractive } from "./environment.js";
 import { CliError } from "./errors.js";
+import { init, type RunCommand } from "./init.js";
 import {
   completeLogin,
   currentLogin,
@@ -43,6 +44,8 @@ export interface CliContext {
   prompt(question: string): Promise<string>;
   /** 標準入力の行入力（Enter）を受ける。戻り値で購読をやめる。 */
   onLine(listener: () => void): () => void;
+  /** init で package manager を実行する。テストでは差し替える。 */
+  runCommand: RunCommand;
 }
 
 export const version: string = JSON.parse(
@@ -51,13 +54,21 @@ export const version: string = JSON.parse(
 
 const common = ["json", "profile", "api-origin", "app-origin", "help"];
 const commands: Record<string, string[]> = {
+  init: [...common, "creator"],
   login: [...common, "complete"],
   logout: common,
   whoami: common,
   status: common,
   "products list": common,
   "products get": common,
-  "products create": [...common, "yes", "name", "price", "access-url"],
+  "products create": [
+    ...common,
+    "yes",
+    "name",
+    "price",
+    "access-url",
+    "allow-duplicate",
+  ],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
 };
@@ -67,6 +78,9 @@ const help = `Cozeni CLI ${version}
 使い方: ${CLI} <コマンド> [オプション]
 
 コマンド:
+  init --creator <クリエイターID>
+                            導入の準備（SDKを依存に追加し、skillを置き、
+                            接続先と使うアカウントを覚える）
   login                     ログインを始める（承認用のURLとコードを表示）
   login --complete          承認を確かめてログインを終える
   logout                    ログインを終え、保存したキーを失効させる
@@ -75,7 +89,9 @@ const help = `Cozeni CLI ${version}
   products list             商品一覧
   products get <商品ID>     商品1件と購入リンクの状態を表示（リンクは発行しない）
   products create --name <名前> --price <円> --access-url <URL>
-                            商品を作成し、購入リンクを返す（確認が必要）
+                            商品を作成し、購入リンクを返す（確認が必要）。
+                            同じ内容の商品があれば作らずにそれを返す
+                            （それでも作るなら --allow-duplicate）
   products update <商品ID> [--name] [--price] [--access-url]
                             商品を変更（価格・URLの変更は確認が必要）
   link <商品ID>             購入リンクを取得（無ければ発行）
@@ -83,7 +99,8 @@ const help = `Cozeni CLI ${version}
 共通オプション:
   --json                    AI向けの機械可読出力（1行のJSON）
   --yes                     確認を省略する（利用者に確認してから付ける）
-  --profile <名前>          接続するCozeniの環境（既定: production）
+  --profile <名前>          接続するCozeniの環境（既定: init で選んだもの、
+                            無ければ production）
   --help, --version
 `;
 
@@ -121,6 +138,8 @@ type Flags = {
   "api-origin"?: string;
   "app-origin"?: string;
   complete?: boolean;
+  creator?: string;
+  "allow-duplicate"?: boolean;
   name?: string;
   price?: string;
   "access-url"?: string;
@@ -141,6 +160,8 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         "api-origin": { type: "string" },
         "app-origin": { type: "string" },
         complete: { type: "boolean" },
+        creator: { type: "string" },
+        "allow-duplicate": { type: "boolean" },
         name: { type: "string" },
         price: { type: "string" },
         "access-url": { type: "string" },
@@ -204,10 +225,28 @@ export async function run(context: CliContext): Promise<number> {
         { hint: `${CLI} --help で使い方を確認してください。` },
       );
 
+    const store = createStore(context.env);
+    if (name === "init") {
+      write(
+        context,
+        json,
+        await init(
+          {
+            cwd: context.cwd,
+            env: context.env,
+            version,
+            runCommand: context.runCommand,
+          },
+          store,
+          flags,
+        ),
+      );
+      return 0;
+    }
+
     const warning = await skillVersionWarning(context.cwd, version);
     if (warning) context.stderr.write(`${warning}\n`);
 
-    const store = createStore(context.env);
     const profile = resolveProfile(
       flags,
       context.env,

@@ -97,6 +97,9 @@ function cli(
       lineListeners.push(listener);
       return () => {};
     },
+    runCommand: async () => {
+      throw new Error("このテストでは子プロセスを起動しない");
+    },
   });
   return {
     state,
@@ -960,7 +963,7 @@ describe("使い方と版の照合", () => {
     const t = cli(() => json(account));
     const { code, err } = await t.run("whoami", "--json");
     expect(code).toBe(0);
-    expect(err).toContain("npx skills add nulogic-jp/cozeni-sdk");
+    expect(err).toContain("npx @nulogic/cozeni-sdk init");
   });
 });
 

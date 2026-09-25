@@ -3,7 +3,7 @@ name: cozeni-setup
 description: Cozeni（@nulogic/cozeni-sdk）で有料コンテンツを販売する作業全般で使う。サイトへの購入ボタンと購入者限定ページの導入、商品の作成・価格や限定ページの変更、購入リンクの取得、「買えない」「もう売れる？」「審査は通った？」など販売状態の確認と原因の調査を扱う。
 license: MIT
 metadata:
-  cozeni-sdk-version: ">=0.4.0 <0.5.0"
+  cozeni-sdk-version: ">=0.5.0 <0.6.0"
 ---
 
 # Cozeni
