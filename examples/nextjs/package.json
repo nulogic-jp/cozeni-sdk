@@ -8,12 +8,12 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3100",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint app lib next.config.ts tests",
+    "lint": "biome lint app lib proxy.ts next.config.ts tests",
     "test": "vitest run tests"
   },
   "dependencies": {
-    "@nulogic/cozeni-sdk": "^0.3.0",
-    "next": "^15.5.4",
+    "@nulogic/cozeni-sdk": "^0.4.0",
+    "next": "^16.3.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "server-only": "^0.0.1"

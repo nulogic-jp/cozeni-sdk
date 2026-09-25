@@ -50,6 +50,7 @@
     "README.md",
     "examples/nextjs/app",
     "examples/nextjs/lib",
+    "examples/nextjs/proxy.ts",
     "examples/nextjs/next.config.ts",
     "examples/nextjs/tsconfig.json",
     "examples/nextjs/package.json",

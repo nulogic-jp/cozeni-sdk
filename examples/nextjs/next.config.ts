@@ -13,14 +13,12 @@ const config: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
         ],
       },
-      ...["/members/:path*", "/api/protected/:path*", "/cozeni/:path*"].map(
-        (source) => ({
-          source,
-          headers: [
-            { key: "Cache-Control", value: "private, no-store, max-age=0" },
-          ],
-        }),
-      ),
+      ...["/members/:path*", "/api/protected/:path*"].map((source) => ({
+        source,
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+        ],
+      })),
     ];
   },
 };

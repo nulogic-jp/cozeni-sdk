@@ -26,8 +26,11 @@ export function run(command, args, cwd, env) {
 /**
  * HEADをnpm packしたtarballを差し込んだ一時consumerを用意する。呼び出し側は
  * `bun install`等のセットアップを自分で行い、使い終わったらcleanup()すること。
+ *
+ * `options.next` を渡すと、そのNext.jsの版で組み立てる。`options.middleware` が
+ * trueなら、Next.js 15以前の書き方（middleware.ts）に置き換える。
  */
-export async function prepareExampleConsumer(prefix) {
+export async function prepareExampleConsumer(prefix, options = {}) {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   );
@@ -61,6 +64,20 @@ export async function prepareExampleConsumer(prefix) {
     await readFile(join(consumer, "package.json"), "utf8"),
   );
   manifest.dependencies[packageJson.name] = `file:${tarball}`;
+  if (options.next) manifest.dependencies.next = options.next;
+  if (options.middleware) {
+    const proxy = await readFile(join(consumer, "proxy.ts"), "utf8");
+    const middleware = proxy.replace(
+      "cozeniProxy as proxy",
+      "cozeniProxy as middleware",
+    );
+    if (middleware === proxy)
+      throw new Error("proxy.tsをmiddleware.tsへ置き換えられません。");
+    await writeFile(join(consumer, "middleware.ts"), middleware);
+    await rm(join(consumer, "proxy.ts"));
+    // proxy.tsを読み込む例のテストは、middleware版では実行しない。
+    await rm(join(consumer, "tests"), { recursive: true, force: true });
+  }
   await writeFile(
     join(consumer, "package.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,

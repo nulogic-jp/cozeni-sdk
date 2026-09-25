@@ -1,26 +1,20 @@
-import { AccessDenied, denialResponse } from "@nulogic/cozeni-sdk/next";
-import {
-  productId,
-  protectedData,
-  reportServerError,
-} from "../../../lib/cozeni";
+import { denialResponse, entitlement } from "@nulogic/cozeni-sdk/next";
+import { PROTECTED_CONTENT } from "../../../lib/content";
+import { PRODUCT_ID } from "../../../lib/cozeni";
+
 export const dynamic = "force-dynamic";
+
+// JSONを返す入口はリダイレクトしない。拒否は401/403/503で、enter_urlは本文に含める。
 export async function GET() {
-  const headers = {
-    "Cache-Control": "private, no-store",
-    "Referrer-Policy": "no-referrer",
-  };
-  try {
-    return Response.json(await protectedData(), { headers });
-  } catch (error) {
-    reportServerError(error, "保護データAPI");
-    // Route Handlerはリダイレクトせず、enter_urlをJSON本文へ含めて拒否する。
-    // denialResponse()はproductId一致をenter_url採用の条件に含めて再検証する。
-    return denialResponse(
-      error instanceof AccessDenied
-        ? error.entitlement
-        : { entitled: false, reason: "unavailable" },
-      productId(),
-    );
-  }
+  const result = await entitlement(PRODUCT_ID);
+  if (!result.entitled) return denialResponse(result, PRODUCT_ID);
+  return Response.json(
+    { content: PROTECTED_CONTENT },
+    {
+      headers: {
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+      },
+    },
+  );
 }

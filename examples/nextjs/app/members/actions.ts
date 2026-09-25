@@ -1,21 +1,19 @@
 "use server";
-import { AccessDenied } from "@nulogic/cozeni-sdk/next";
-import { protectedData, reportServerError } from "../../lib/cozeni";
+import { entitlement } from "@nulogic/cozeni-sdk/next";
+import { PROTECTED_CONTENT } from "../../lib/content";
+import { PRODUCT_ID } from "../../lib/cozeni";
+
+// Server Actionは直接POSTされうるので、ページとは別に毎回認可する。
+// リダイレクトせず、拒否の理由をplain objectで返す。
 export async function protectedAction(): Promise<
   { ok: true; content: string } | { ok: false; reason: string }
 > {
-  try {
-    // Server Actionを直接POSTされた場合も、操作前に必ず認可する（redirectはしない）。
-    const data = await protectedData();
-    return { ok: true, content: data.content };
-  } catch (error) {
-    reportServerError(error, "購入者操作");
-    if (error instanceof AccessDenied)
-      return { ok: false, reason: error.reason };
-    return { ok: false, reason: "unavailable" };
-  }
+  const result = await entitlement(PRODUCT_ID);
+  if (!result.entitled) return { ok: false, reason: result.reason };
+  return { ok: true, content: PROTECTED_CONTENT };
 }
-// フォームからの呼び出しも同じ認可済み操作を利用する。
+
+// フォームからの呼び出しも同じ認可済み操作を使う。
 export async function submitProtectedAction() {
   await protectedAction();
 }
