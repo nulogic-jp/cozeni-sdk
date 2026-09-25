@@ -16,6 +16,7 @@ const exitCodes: Record<string, number> = {
   product_archived: 4,
   checkout_link_disabled: 4,
   idempotency_conflict: 4,
+  creator_mismatch: 4,
   network_unreachable: 5,
   unexpected_redirect: 5,
   rate_limited: 5,

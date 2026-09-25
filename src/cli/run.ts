@@ -3,7 +3,7 @@
 // Next.js専用の`/next`は読み込まない（server-onlyとnext/*に依存するため）。
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { CLI, resolveProfile, session } from "./api.js";
+import { CLI, resolveProfile, session, verifyCreator } from "./api.js";
 import {
   type CommandContext,
   createProduct,
@@ -20,6 +20,7 @@ import { isInteractive } from "./environment.js";
 import { CliError } from "./errors.js";
 import {
   completeLogin,
+  currentLogin,
   type LoginContext,
   logout,
   startLogin,
@@ -206,8 +207,12 @@ export async function run(context: CliContext): Promise<number> {
     const warning = await skillVersionWarning(context.cwd, version);
     if (warning) context.stderr.write(`${warning}\n`);
 
-    const profile = resolveProfile(flags, context.env);
     const store = createStore(context.env);
+    const profile = resolveProfile(
+      flags,
+      context.env,
+      await store.loadConfig(),
+    );
     // 保存先に不備があっても、ここでは止めない（必要なコマンドがその場で報告する）。
     await removeExpiredIdempotencyKeys(store, context.now()).catch(() => {});
     const interactive = isInteractive(
@@ -224,11 +229,21 @@ export async function run(context: CliContext): Promise<number> {
     };
 
     if (name === "login") {
+      if (flags.complete) {
+        write(
+          context,
+          json,
+          loginOutput(await completeLogin(loginContext, store, profile)),
+        );
+        return 0;
+      }
+      // 保存済みのキーがそのまま使えるなら、承認をやり直させない。
+      const current = await currentLogin(loginContext, store, profile);
       write(
         context,
         json,
-        flags.complete
-          ? loginOutput(await completeLogin(loginContext, store, profile))
+        current
+          ? loginOutput(current)
           : interactive
             ? await interactiveLogin(context, loginContext, store, profile)
             : startOutput(await startLogin(loginContext, store, profile)),
@@ -278,6 +293,7 @@ export async function run(context: CliContext): Promise<number> {
       context.fetch,
       context.now(),
     );
+    await verifyCreator(current, context.now());
     const id = args[0] ?? "";
     const output =
       name === "whoami"
@@ -322,11 +338,16 @@ function startOutput(result: Awaited<ReturnType<typeof startLogin>>): Output {
 function loginOutput(
   result: Awaited<ReturnType<typeof completeLogin>>,
 ): Output {
-  const human = [
-    `ログインしました（クリエイター: ${result.creator_id}、環境: ${result.environment}）。`,
-    `ログインの有効期限: ${result.expires_at}（セキュリティのため30日ごとに確認をお願いしています）`,
-    `認証情報は ${result.credentials_path} に平文で保存しました（所有者だけが読める権限です）。`,
-  ];
+  const human = result.already_logged_in
+    ? [
+        `すでにログインしています（クリエイター: ${result.creator_id}、環境: ${result.environment}）。`,
+        `ログインの有効期限: ${result.expires_at}`,
+      ]
+    : [
+        `ログインしました（クリエイター: ${result.creator_id}、環境: ${result.environment}）。`,
+        `ログインの有効期限: ${result.expires_at}（セキュリティのため30日ごとに確認をお願いしています）`,
+        `認証情報は ${result.credentials_path} に平文で保存しました（所有者だけが読める権限です）。`,
+      ];
   if (result.warnings.includes("previous_key_not_revoked"))
     human.push(
       "注意: 前のログインのキーを失効できませんでした。30日で自動的に無効になります。",
@@ -335,6 +356,7 @@ function loginOutput(
     human.push(
       "注意: 環境変数 COZENI_API_KEY が設定されているため、以後のコマンドはそちらのキーを使います。ログインしたキーを使うには環境変数から外してください。",
     );
+  human.push(`次に実行します: ${result.next_step}`);
   return { data: { ...result }, human };
 }
 

@@ -9,7 +9,13 @@ import {
   type UpdateProduct,
 } from "../index.js";
 import { isLoopback, record } from "../transport.js";
-import { CLI, convert, profileSuffix, type Session } from "./api.js";
+import {
+  CLI,
+  convert,
+  KEY_EXPIRING_MS,
+  profileSuffix,
+  type Session,
+} from "./api.js";
 import { CliError } from "./errors.js";
 import type { Store } from "./store.js";
 
@@ -24,7 +30,6 @@ export interface Output {
 }
 
 const yen = (value: number) => `${value.toLocaleString("ja-JP")}円`;
-const KEY_EXPIRING_MS = 7 * 24 * 60 * 60 * 1000;
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function call<T>(
@@ -62,6 +67,7 @@ export async function whoami(
       key_source: session.source,
       scopes: account.scopes,
       expires_at: expiresAt,
+      expected_creator_id: session.profile.expectedCreatorId ?? null,
     },
     human: [
       `接続先: ${session.apiOrigin}（${account.environment}）`,

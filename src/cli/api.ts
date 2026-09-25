@@ -3,12 +3,19 @@
 import { createManagementClient } from "../index.js";
 import { CozeniError, origin } from "../transport.js";
 import { CliError } from "./errors.js";
-import type { Credential, Store } from "./store.js";
+import {
+  type Config,
+  type Credential,
+  PROFILE_NAME,
+  type Store,
+} from "./store.js";
 
 export const CLI = "npx @nulogic/cozeni-sdk";
 export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://app.cozeni.net";
 export const TIMEOUT_MS = 15000;
+/** ログインの期限が近いとみなす残り時間。 */
+export const KEY_EXPIRING_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface Profile {
   name: string;
@@ -16,11 +23,15 @@ export interface Profile {
   // 明示的な指定（production以外のプロファイルでだけ受け付ける）。
   apiOrigin?: string;
   appOrigin?: string;
+  /** init で覚えた、このプロファイルで使うはずのクリエイター。 */
+  expectedCreatorId?: string;
+  /** --profile を省略したときに選ばれるプロファイルか。 */
+  isDefault: boolean;
 }
 
-/** 案内文に付けるプロファイル指定。既定のproductionでは何も付けない。 */
+/** 案内文に付けるプロファイル指定。既定のプロファイルでは何も付けない。 */
 export function profileSuffix(profile: Profile): string {
-  return profile.production ? "" : ` --profile ${profile.name}`;
+  return profile.isDefault ? "" : ` --profile ${profile.name}`;
 }
 
 function normalized(value: string, label: string): string {
@@ -34,16 +45,32 @@ function normalized(value: string, label: string): string {
   }
 }
 
+/**
+ * --profile を省略したら config.json の default_profile、無ければ production を使う。
+ * production以外の接続先は、指定 → COZENI_API_ORIGIN → config.json の順に決める。
+ */
 export function resolveProfile(
   options: { profile?: string; "api-origin"?: string; "app-origin"?: string },
   env: Record<string, string | undefined>,
+  config: Config = { version: 1, profiles: {} },
 ): Profile {
-  const name = options.profile ?? "production";
-  if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name))
+  const defaultName = config.default_profile ?? "production";
+  const name = options.profile ?? defaultName;
+  if (!PROFILE_NAME.test(name))
     throw new CliError(
       "invalid_input",
       "--profile は英小文字・数字・-・_ の32文字以内で指定してください。",
     );
+  const saved = Object.hasOwn(config.profiles, name)
+    ? config.profiles[name]
+    : undefined;
+  const common = {
+    name,
+    isDefault: name === defaultName,
+    ...(saved?.expected_creator_id
+      ? { expectedCreatorId: saved.expected_creator_id }
+      : {}),
+  };
   const api = options["api-origin"] ?? env.COZENI_API_ORIGIN;
   const app = options["app-origin"];
   if (name === "production") {
@@ -62,20 +89,21 @@ export function resolveProfile(
         },
       );
     return {
-      name,
+      ...common,
       production: true,
       apiOrigin: PRODUCTION_API_ORIGIN,
       appOrigin: PRODUCTION_APP_ORIGIN,
     };
   }
   return {
-    name,
+    ...common,
     production: false,
     apiOrigin:
       api === undefined
-        ? undefined
+        ? saved?.api_origin
         : normalized(api, "--api-origin / COZENI_API_ORIGIN"),
-    appOrigin: app === undefined ? undefined : normalized(app, "--app-origin"),
+    appOrigin:
+      app === undefined ? saved?.app_origin : normalized(app, "--app-origin"),
   };
 }
 
@@ -170,6 +198,53 @@ export async function session(
     credential,
     client,
   };
+}
+
+/** 使うキーのクリエイターが、init で覚えたクリエイターと違う。 */
+export function creatorMismatch(
+  profile: Profile,
+  actual: string,
+  source: "login" | "saved" | "env",
+): CliError {
+  const expected = profile.expectedCreatorId ?? "";
+  const login = `${CLI} login${profileSuffix(profile)}`;
+  const text =
+    source === "login"
+      ? `別のアカウント（${actual}）で許可されました。この導入で使うアカウントは ${expected} です。`
+      : `使おうとしたキーは別のアカウント（${actual}）のものです。この導入で使うアカウントは ${expected} です。`;
+  const hint =
+    source === "env"
+      ? "環境変数 COZENI_API_KEY を外すか、正しいアカウントのキーに替えてから、同じコマンドを再実行してください。"
+      : `ブラウザで Cozeni の正しいアカウント（${expected}）にログインし直してから、${login} からやり直してください。`;
+  return new CliError("creator_mismatch", text, {
+    hint,
+    details: { expected_creator_id: expected, actual_creator_id: actual },
+  });
+}
+
+/** 期待するクリエイターがあれば、使うキーのクリエイターと照合する。要求を送る前に呼ぶ。 */
+export async function verifyCreator(
+  current: Session,
+  now: number,
+): Promise<void> {
+  const expected = current.profile.expectedCreatorId;
+  if (!expected) return;
+  let actual: string;
+  if (current.credential) actual = current.credential.creator_id;
+  else {
+    try {
+      actual = (await current.client.account.get()).creator_id;
+    } catch (error) {
+      throw convert(error, {
+        apiOrigin: current.apiOrigin,
+        appOrigin: current.appOrigin,
+        session: current,
+        now,
+      });
+    }
+  }
+  if (actual !== expected)
+    throw creatorMismatch(current.profile, actual, current.source);
 }
 
 function expired(profile: Profile): CliError {

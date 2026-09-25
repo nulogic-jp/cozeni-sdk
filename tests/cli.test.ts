@@ -963,3 +963,198 @@ describe("使い方と版の照合", () => {
     expect(err).toContain("npx skills add nulogic-jp/cozeni-sdk");
   });
 });
+
+async function saveConfig(
+  config: Parameters<ReturnType<typeof createStore>["saveConfig"]>[0],
+) {
+  await createStore({ XDG_CONFIG_HOME: home }).saveConfig(config);
+}
+const expected = (creator = "crt_1") => ({
+  version: 1 as const,
+  default_profile: "production",
+  profiles: {
+    production: { expected_creator_id: creator.replace(/^crt_/, "cre_") },
+  },
+});
+
+describe("既定のプロファイル", () => {
+  it("--profileを省略したらconfig.jsonのdefault_profileと、その接続先を使う", async () => {
+    await saveConfig({
+      version: 1,
+      default_profile: "staging",
+      profiles: {
+        staging: {
+          api_origin: "https://api.staging.example",
+          app_origin: "https://app.staging.example",
+        },
+      },
+    });
+    const t = cli(() => json(deviceCode));
+    await t.run("login", "--json");
+    expect(t.calls[0]?.path).toBe(
+      "https://api.staging.example/external/v1/cli/device-codes",
+    );
+    expect(t.calls).toHaveLength(1);
+  });
+  it("既定のプロファイルでは次のコマンドに--profileを付けない", async () => {
+    await saveConfig({
+      version: 1,
+      default_profile: "staging",
+      profiles: {
+        staging: {
+          api_origin: "https://api.staging.example",
+          app_origin: "https://app.staging.example",
+        },
+      },
+    });
+    const t = cli(() =>
+      json({
+        ...deviceCode,
+        verification_uri: "https://app.staging.example/device",
+        verification_uri_complete: undefined,
+      }),
+    );
+    expect((await t.run("login", "--json")).code).toBe(0);
+    expect(t.parsed().data.next_step).toBe(
+      "npx @nulogic/cozeni-sdk login --complete",
+    );
+  });
+  it("config.jsonが無ければproduction", async () => {
+    await saveLogin();
+    const t = cli(() => json(account));
+    await t.run("whoami", "--json");
+    expect(t.calls[0]?.path).toBe(`${API}/external/v1/account`);
+  });
+});
+
+describe("loginの冪等化とクリエイターの照合", () => {
+  const cre = { ...account, creator_id: "cre_1" };
+  const creToken = { ...token, creator_id: "cre_1" };
+  it("保存済みのキーが有効で期待するクリエイターなら、何もせず成功する", async () => {
+    await saveConfig(expected("cre_1"));
+    await saveLogin({ creator_id: "cre_1" });
+    const t = cli(() => json(cre));
+    expect((await t.run("login", "--json")).code).toBe(0);
+    expect(t.calls.map((call) => call.path)).toEqual([
+      `${API}/external/v1/account`,
+    ]);
+    expect(t.parsed().data).toMatchObject({
+      already_logged_in: true,
+      creator_id: "cre_1",
+      next_step: "npx @nulogic/cozeni-sdk status",
+    });
+  });
+  it.each([
+    [
+      "別のクリエイターのキー",
+      { creator_id: "cre_other" },
+      () => json({ ...cre, creator_id: "cre_other" }),
+    ],
+    [
+      "期限まで7日を切ったキー",
+      { creator_id: "cre_1", expires_at: "2026-09-30T00:00:00.000Z" },
+      () => json(cre),
+    ],
+    [
+      "失効したキー",
+      { creator_id: "cre_1" },
+      () => apiError("unauthorized", 401),
+    ],
+  ] as const)(
+    "%sなら新しくログインを始める",
+    async (_, saved, accountResponse) => {
+      await saveConfig(expected("cre_1"));
+      await saveLogin(saved);
+      const t = cli(({ path }) =>
+        path.endsWith("/account") ? accountResponse() : json(deviceCode),
+      );
+      expect((await t.run("login", "--json")).code).toBe(0);
+      expect(t.parsed().data.user_code).toBe("BCDF-GHJK");
+      expect(
+        t.calls.some((call) => call.path.endsWith("/cli/device-codes")),
+      ).toBe(true);
+    },
+  );
+  it("--completeで得たキーが期待と違えば保存せず失効させ、creator_mismatchで止める", async () => {
+    await saveConfig(expected("cre_1"));
+    const t = cli(({ path }) => {
+      if (path.endsWith("/cli/device-codes")) return json(deviceCode);
+      if (path.endsWith("/cli/tokens"))
+        return json({ ...creToken, creator_id: "cre_other" });
+      return new Response(null, { status: 204 });
+    });
+    await t.run("login", "--json");
+    const { code, out } = await t.run("login", "--complete", "--json");
+    expect(code).toBe(4);
+    const error = t.parsed().error;
+    expect(error.code).toBe("creator_mismatch");
+    expect(error.message).toContain("別のアカウント");
+    expect(error).toMatchObject({
+      expected_creator_id: "cre_1",
+      actual_creator_id: "cre_other",
+    });
+    expect(out).not.toContain(creToken.api_key);
+    const logout = t.calls.find((call) => call.path.endsWith("/cli/logout"));
+    expect(logout?.headers.get("Authorization")).toBe(
+      `Bearer ${creToken.api_key}`,
+    );
+    expect(
+      await createStore({ XDG_CONFIG_HOME: home }).loadCredential("production"),
+    ).toBeUndefined();
+    await expect(
+      lstat(join(home, "cozeni", "pending", "login-production.json")),
+    ).rejects.toThrow();
+  });
+  it("--completeで期待どおりなら保存し、次にstatusを案内する", async () => {
+    await saveConfig(expected("cre_1"));
+    const t = cli(({ path }) =>
+      path.endsWith("/cli/device-codes") ? json(deviceCode) : json(creToken),
+    );
+    await t.run("login", "--json");
+    expect((await t.run("login", "--complete", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      already_logged_in: false,
+      creator_id: "cre_1",
+      next_step: "npx @nulogic/cozeni-sdk status",
+    });
+  });
+  it("保存済みのキーのクリエイターが違えば、要求を送らずに止める", async () => {
+    await saveConfig(expected("cre_1"));
+    await saveLogin({ creator_id: "cre_other" });
+    const t = cli(() => json(cre));
+    const { code } = await t.run("link", "prd_1", "--json");
+    expect(code).toBe(4);
+    expect(t.parsed().error.code).toBe("creator_mismatch");
+    expect(t.calls).toHaveLength(0);
+  });
+  it("COZENI_API_KEYのクリエイターが違えば、GET /accountだけで止める", async () => {
+    await saveConfig(expected("cre_1"));
+    const t = cli(() => json({ ...cre, creator_id: "cre_other" }), {
+      env: { COZENI_API_KEY: "cozeni_env_secret" },
+    });
+    const { code } = await t.run(
+      "products",
+      "create",
+      "--name",
+      "x",
+      "--price",
+      "1000",
+      "--access-url",
+      "https://site.example/m",
+      "--yes",
+      "--json",
+    );
+    expect(code).toBe(4);
+    expect(t.parsed().error.code).toBe("creator_mismatch");
+    expect(t.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      `GET ${API}/external/v1/account`,
+    ]);
+  });
+  it("期待するクリエイターと一致すれば通常どおり動く", async () => {
+    await saveConfig(expected("cre_1"));
+    await saveLogin({ creator_id: "cre_1" });
+    const t = cli(() => json(cre));
+    expect((await t.run("whoami", "--json")).code).toBe(0);
+    expect(t.parsed().data.expected_creator_id).toBe("cre_1");
+  });
+});

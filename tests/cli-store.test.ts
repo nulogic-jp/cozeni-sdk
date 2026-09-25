@@ -153,3 +153,51 @@ describe("安全でない保存状態の拒否", () => {
     await expect(store.savePending("../x", {})).rejects.toThrow();
   });
 });
+
+describe("既定の設定（config.json）", () => {
+  it("無ければ空の設定を返す", async () => {
+    const store = createStore({ XDG_CONFIG_HOME: home });
+    expect(await store.loadConfig()).toEqual({ version: 1, profiles: {} });
+  });
+  it("0700・0600で書き、一時ファイルを残さず、読み戻せる", async () => {
+    const store = createStore({ XDG_CONFIG_HOME: home });
+    await store.saveConfig({
+      version: 1,
+      default_profile: "staging",
+      profiles: {
+        staging: {
+          expected_creator_id: "cre_abc",
+          api_origin: "https://api.staging.example",
+          app_origin: "https://app.staging.example",
+        },
+      },
+    });
+    expect(store.configPath).toBe(join(home, "cozeni", "config.json"));
+    expect(await mode(join(home, "cozeni"))).toBe(0o700);
+    expect(await mode(join(home, "cozeni", "config.json"))).toBe(0o600);
+    expect(await readdir(join(home, "cozeni"))).toEqual(["config.json"]);
+    expect(
+      (await store.loadConfig()).profiles.staging?.expected_creator_id,
+    ).toBe("cre_abc");
+  });
+  it("形式が違えばinvalid_stateにする", async () => {
+    const store = createStore({ XDG_CONFIG_HOME: home });
+    await mkdir(join(home, "cozeni"), { mode: 0o700 });
+    await writeFile(
+      join(home, "cozeni", "config.json"),
+      JSON.stringify({ version: 1, default_profile: "../x", profiles: {} }),
+      { mode: 0o600 },
+    );
+    await expect(store.loadConfig()).rejects.toMatchObject({
+      code: "invalid_state",
+    });
+  });
+  it("権限の広い設定ファイルは読まない", async () => {
+    const store = createStore({ XDG_CONFIG_HOME: home });
+    await store.saveConfig({ version: 1, profiles: {} });
+    await chmod(join(home, "cozeni", "config.json"), 0o644);
+    await expect(store.loadConfig()).rejects.toMatchObject({
+      code: "insecure_storage",
+    });
+  });
+});

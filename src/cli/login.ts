@@ -1,6 +1,8 @@
 // デバイスコード方式（RFC 8628）のログインとログアウト。
 // AIエージェントのシェルはコマンドの終了まで出力を返さないことが多いため、
 // 非対話では「コードを出してすぐ終了」→「--complete で承認を確かめる」の2段階にする。
+
+import { createManagementClient } from "../index.js";
 import {
   CozeniError,
   failure,
@@ -9,8 +11,11 @@ import {
   transport,
 } from "../transport.js";
 import {
+  boundOrigin,
   CLI,
   convert,
+  creatorMismatch,
+  KEY_EXPIRING_MS,
   type Profile,
   profileSuffix,
   TIMEOUT_MS,
@@ -205,6 +210,7 @@ export async function startLogin(
 }
 
 export interface LoginResult {
+  already_logged_in: boolean;
   profile: string;
   api_origin: string;
   creator_id: string;
@@ -213,6 +219,62 @@ export interface LoginResult {
   expires_at: string;
   credentials_path: string;
   warnings: string[];
+  next_step: string;
+}
+
+/**
+ * 保存済みのキーがそのまま使えるなら、ログインを省く。
+ * 使えるのは、期限まで7日以上あり、接続先が一致し、GET /account が成功し、
+ * 期待するクリエイター（init で覚えたもの）と一致するとき。
+ * それ以外（失効・別のクリエイター・期限間近・確認の失敗）は undefined を返し、新しくログインさせる。
+ */
+export async function currentLogin(
+  context: LoginContext,
+  store: Store,
+  profile: Profile,
+): Promise<LoginResult | undefined> {
+  const saved = await store.loadCredential(profile.name);
+  if (!saved) return undefined;
+  if (Date.parse(saved.expires_at) - context.now() < KEY_EXPIRING_MS)
+    return undefined;
+  if (profile.appOrigin !== undefined && profile.appOrigin !== saved.app_origin)
+    return undefined;
+  let apiOrigin: string;
+  let client: ReturnType<typeof createManagementClient>;
+  try {
+    apiOrigin = boundOrigin(profile, saved);
+    client = createManagementClient({
+      apiOrigin,
+      apiKey: saved.api_key,
+      fetch: context.fetch,
+      timeoutMs: TIMEOUT_MS,
+    });
+  } catch {
+    return undefined;
+  }
+  let creatorId: string;
+  try {
+    creatorId = (await client.account.get()).creator_id;
+  } catch {
+    // 確かめられないときは、新しいログインへ進む（通信できなければそちらで案内する）。
+    return undefined;
+  }
+  if (profile.expectedCreatorId && creatorId !== profile.expectedCreatorId)
+    return undefined;
+  return {
+    already_logged_in: true,
+    profile: profile.name,
+    api_origin: saved.api_origin,
+    creator_id: creatorId,
+    environment: saved.environment,
+    key_id: saved.key_id,
+    expires_at: saved.expires_at,
+    credentials_path: store.credentialsPath,
+    warnings: context.env.COZENI_API_KEY?.trim()
+      ? ["env_key_takes_precedence"]
+      : [],
+    next_step: `${CLI} status${profileSuffix(profile)}`,
+  };
 }
 
 function validToken(
@@ -368,12 +430,21 @@ export async function completeLogin(
     }
   }
 
-  const previous = await store.loadCredential(profile.name);
   const credential: Credential = {
     api_origin: pending.api_origin,
     app_origin: pending.app_origin,
     ...issued,
   };
+  // 別のアカウントで許可されたキーは保存せず、サーバーでも失効させる。
+  if (
+    profile.expectedCreatorId &&
+    credential.creator_id !== profile.expectedCreatorId
+  ) {
+    await store.removePending(name);
+    await revoke(context, profile, credential);
+    throw creatorMismatch(profile, credential.creator_id, "login");
+  }
+  const previous = await store.loadCredential(profile.name);
   await store.saveCredential(profile.name, credential);
   await store.removePending(name);
   const warnings: string[] = [];
@@ -386,6 +457,7 @@ export async function completeLogin(
   if (context.env.COZENI_API_KEY?.trim())
     warnings.push("env_key_takes_precedence");
   return {
+    already_logged_in: false,
     profile: profile.name,
     api_origin: credential.api_origin,
     creator_id: credential.creator_id,
@@ -394,6 +466,7 @@ export async function completeLogin(
     expires_at: credential.expires_at,
     credentials_path: store.credentialsPath,
     warnings,
+    next_step: `${CLI} status${profileSuffix(profile)}`,
   };
 }
 
