@@ -3,7 +3,7 @@
 // シンボリックリンクや緩い権限を見つけたら読み書きせずに止める。
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { CliError } from "./errors.js";
@@ -235,6 +235,15 @@ export function createStore(env: Record<string, string | undefined>) {
       const path = pendingPath(name);
       await ensureDirectory(directory);
       await writeJson(pendingDirectory, path, value);
+    },
+    /** 指定した接頭辞の待ち状態の名前を返す。 */
+    async listPending(prefix: string): Promise<string[]> {
+      if (!(await checkDirectory(directory))) return [];
+      if (!(await checkDirectory(pendingDirectory))) return [];
+      return (await readdir(pendingDirectory))
+        .filter((file) => file.startsWith(prefix) && file.endsWith(".json"))
+        .map((file) => file.slice(0, -".json".length))
+        .filter((name) => /^[a-z0-9][a-z0-9_-]{0,127}$/.test(name));
     },
     async removePending(name: string) {
       const path = pendingPath(name);

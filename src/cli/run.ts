@@ -10,6 +10,7 @@ import {
   link,
   listProducts,
   type Output,
+  removeExpiredIdempotencyKeys,
   status,
   updateProduct,
   whoami,
@@ -203,6 +204,8 @@ export async function run(context: CliContext): Promise<number> {
 
     const profile = resolveProfile(flags, context.env);
     const store = createStore(context.env);
+    // 保存先に不備があっても、ここでは止めない（必要なコマンドがその場で報告する）。
+    await removeExpiredIdempotencyKeys(store, context.now()).catch(() => {});
     const interactive = isInteractive(
       context.env,
       context.interactiveTerminal,

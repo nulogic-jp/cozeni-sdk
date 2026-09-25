@@ -24,6 +24,7 @@ export interface Output {
 
 const yen = (value: number) => `${value.toLocaleString("ja-JP")}円`;
 const KEY_EXPIRING_MS = 7 * 24 * 60 * 60 * 1000;
+export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function call<T>(
   session: Session,
@@ -241,11 +242,18 @@ export interface ProductInput {
   price?: string;
   "access-url"?: string;
 }
+// サーバーが受け付ける価格の範囲（円）。
+const MIN_PRICE = 50;
+const MAX_PRICE = 9_999_999;
 function parsePrice(value: string): number {
-  if (!/^\d{1,9}$/.test(value))
+  if (
+    !/^\d{1,9}$/.test(value) ||
+    Number(value) < MIN_PRICE ||
+    Number(value) > MAX_PRICE
+  )
     throw new CliError(
       "invalid_input",
-      "--price は円の整数で指定してください。",
+      `--price は ${yen(MIN_PRICE)} から ${yen(MAX_PRICE)} までの整数（円）で指定してください。`,
     );
   return Number(value);
 }
@@ -314,18 +322,21 @@ export async function createProduct(
   const pendingName = `idem-${hash}`;
   const saved = await store.loadPending(pendingName);
   let idempotencyKey: string;
+  let reused = false;
   if (
     record(saved) &&
     typeof saved.idempotency_key === "string" &&
     /^[\x21-\x7E]{1,128}$/.test(saved.idempotency_key)
-  )
+  ) {
     idempotencyKey = saved.idempotency_key;
-  else {
+    reused = typeof saved.completed_at === "string";
+  } else {
     idempotencyKey = randomUUID();
     await store.savePending(pendingName, {
       version: 1,
       idempotency_key: idempotencyKey,
       created_at: new Date(context.now()).toISOString(),
+      expires_at: new Date(context.now() + IDEMPOTENCY_TTL_MS).toISOString(),
     });
   }
   const created = await call(session, context, () =>
@@ -336,16 +347,48 @@ export async function createProduct(
       session.client.checkoutLinks.ensure(created.id),
     ),
   );
-  // 商品とリンクの両方がそろってから消す。途中で失敗しても、再実行で同じ商品に戻れる。
-  await store.removePending(pendingName);
+  // 成功後も24時間は同じキーを残す。成功を知らずに打ち直されても、サーバーは同じ商品を返す。
+  await store.savePending(pendingName, {
+    version: 1,
+    idempotency_key: idempotencyKey,
+    created_at:
+      record(saved) && typeof saved.created_at === "string"
+        ? saved.created_at
+        : new Date(context.now()).toISOString(),
+    completed_at: new Date(context.now()).toISOString(),
+    product_id: created.id,
+    expires_at: new Date(context.now() + IDEMPOTENCY_TTL_MS).toISOString(),
+  });
   return {
-    data: { product: created, checkout_link: result },
+    data: { product: created, checkout_link: result, reused },
     human: [
-      `商品を作成しました: ${created.name}（${yen(created.price_jpy)}）`,
+      reused
+        ? `同じ内容の商品を作成済みのため、その商品を返しました: ${created.name}（${yen(created.price_jpy)}）`
+        : `商品を作成しました: ${created.name}（${yen(created.price_jpy)}）`,
       `商品ID: ${created.id}`,
       `購入リンク: ${result.url}`,
     ],
   };
+}
+
+/** 期限（24時間）を過ぎた冪等キーを消す。読めないファイルは消さずに残す。 */
+export async function removeExpiredIdempotencyKeys(
+  store: Store,
+  now: number,
+): Promise<void> {
+  for (const name of await store.listPending("idem-")) {
+    try {
+      const saved = await store.loadPending(name);
+      if (
+        record(saved) &&
+        typeof saved.expires_at === "string" &&
+        Date.parse(saved.expires_at) <= now
+      )
+        await store.removePending(name);
+    } catch {
+      // 1件の不備で他のコマンドを止めない。
+    }
+  }
 }
 
 export async function updateProduct(

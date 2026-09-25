@@ -263,6 +263,31 @@ describe("login（2段階）", () => {
     expect(polls[0]?.body).toEqual({ device_code: deviceCode.device_code });
     expect(t.state.now - START).toBeLessThanOrEqual(90_000);
   });
+  it("--completeは応答が返らなくても90秒を超えて止まらない", async () => {
+    let polls = 0;
+    const t = cli(() => json({}));
+    t.fetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/cli/device-codes")) return json(deviceCode);
+      polls += 1;
+      if (polls === 1) {
+        // 1回目の応答までに、期限の直前まで時間が経ったとみなす。
+        t.state.now += 89_990;
+        return apiError("authorization_pending", 400);
+      }
+      // 2回目は応答が返らない。要求のタイムアウトが残り時間に制限されていれば中断される。
+      return new Promise<Response>((_, reject) =>
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        ),
+      );
+    });
+    await t.run("login", "--json");
+    const started = Date.now();
+    const { code } = await t.run("login", "--complete", "--json");
+    expect(code).toBe(6);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
   it("slow_downで以後の間隔を5秒延ばす", async () => {
     let count = 0;
     const t = cli(({ path }) => {
@@ -457,6 +482,19 @@ describe("認証とエラーの案内", () => {
       expires_at: null,
     });
   });
+  it("COZENI_API_KEYがあれば、壊れた保存ファイルを読まずに使う", async () => {
+    await mkdir(join(home, "cozeni"), { recursive: true, mode: 0o700 });
+    await writeFile(join(home, "cozeni", "credentials.json"), "{", {
+      mode: 0o644,
+    });
+    const t = cli(() => json(account), {
+      env: { COZENI_API_KEY: "cozeni_env_secret" },
+    });
+    expect((await t.run("whoami", "--json")).code).toBe(0);
+    expect(t.calls[0]?.headers.get("Authorization")).toBe(
+      "Bearer cozeni_env_secret",
+    );
+  });
   it("未ログインなら終了コード3", async () => {
     const t = cli(() => json(account));
     expect((await t.run("whoami", "--json")).code).toBe(3);
@@ -595,7 +633,13 @@ describe("products", () => {
     expect(t.parsed().error.code).toBe("confirmation_required");
     expect(t.calls.some((call) => call.method === "POST")).toBe(false);
   });
-  it("--yesで作成し、標準リンクを返して冪等キーを消す", async () => {
+  const idemFiles = async () =>
+    (
+      await import("node:fs/promises").then((fs) =>
+        fs.readdir(join(home, "cozeni", "pending")).catch(() => []),
+      )
+    ).filter((name) => name.startsWith("idem-"));
+  it("--yesで作成し、標準リンクを返す。冪等キーは成功後も残す", async () => {
     await saveLogin();
     const t = cli(server());
     expect((await t.run(...createArgs, "--yes", "--json")).code).toBe(0);
@@ -609,12 +653,49 @@ describe("products", () => {
     expect(t.parsed().data).toMatchObject({
       product: { id: "prd_1" },
       checkout_link: { url: link.url },
+      reused: false,
     });
-    const pending = await import("node:fs/promises").then((fs) =>
-      fs.readdir(join(home, "cozeni", "pending")).catch(() => []),
-    );
-    expect(pending.filter((name) => name.startsWith("idem-"))).toEqual([]);
+    expect(await idemFiles()).toHaveLength(1);
   });
+  it("成功後に同じ入力で打ち直しても同じ冪等キーを送り、作成済みの商品だと示す", async () => {
+    await saveLogin();
+    const t = cli(server());
+    await t.run(...createArgs, "--yes", "--json");
+    t.state.now += 60 * 60 * 1000;
+    const { code, out } = await t.run(...createArgs, "--yes");
+    expect(code).toBe(0);
+    expect(out).toContain("作成済み");
+    await t.run(...createArgs, "--yes", "--json");
+    expect(t.parsed().data.reused).toBe(true);
+    const keys = t.calls
+      .filter((call) => call.method === "POST")
+      .map((call) => call.headers.get("Idempotency-Key"));
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+  });
+  it("24時間を過ぎた冪等キーは起動時に消す", async () => {
+    await saveLogin({ expires_at: "2026-12-31T00:00:00.000Z" });
+    const t = cli(server());
+    await t.run(...createArgs, "--yes", "--json");
+    t.state.now += 23 * 60 * 60 * 1000;
+    await t.run("products", "list", "--json");
+    expect(await idemFiles()).toHaveLength(1);
+    t.state.now += 2 * 60 * 60 * 1000;
+    await t.run("products", "list", "--json");
+    expect(await idemFiles()).toHaveLength(0);
+  });
+  it.each(["49", "10000000", "1.5"])(
+    "価格%sは確認の前にinvalid_inputにする",
+    async (price) => {
+      await saveLogin();
+      const t = cli(server(), { tty: true, answer: "y" });
+      const args = [...createArgs];
+      args[5] = price;
+      expect((await t.run(...args)).code).toBe(2);
+      expect(t.prompt).not.toHaveBeenCalled();
+      expect(t.calls).toHaveLength(0);
+    },
+  );
   it("タイムアウト後の再実行は同じ冪等キーを使う", async () => {
     await saveLogin();
     let first = true;

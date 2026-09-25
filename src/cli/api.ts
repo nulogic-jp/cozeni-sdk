@@ -117,7 +117,12 @@ export async function session(
   now: number,
 ): Promise<Session> {
   const envKey = env.COZENI_API_KEY?.trim();
-  const saved = await store.loadCredential(profile.name);
+  // 環境変数のキーで接続先も決まっているなら、保存ファイルを読まない
+  // （壊れた・権限の緩い保存ファイルで、CIなどの実行が止まらないようにする）。
+  const saved =
+    envKey && profile.apiOrigin
+      ? undefined
+      : await store.loadCredential(profile.name);
   let apiOrigin: string;
   let apiKey: string;
   if (envKey) {

@@ -89,7 +89,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 商品の作成、価格の変更、`access_url`（購入後に表示するページ）の変更は、`--yes` が無ければ実行しません。`access_url` の変更は既存の購入者全員にすぐ反映されるためです。TTYでは変更前後を示して確認を求め、TTYが無ければ `confirmation_required` で止まります（確認する内容は `error.details`）。AIは利用者に確認してから `--yes` を付けて実行します。
 
-`products create` は入力ごとに冪等キーを保存してから送信します。タイムアウトなどで結果が分からないときは、同じコマンドをそのまま再実行すれば、商品が二重に作られません。
+`products create` は入力ごとに冪等キーを保存してから送信します。タイムアウトなどで結果が分からないときは、同じコマンドをそのまま再実行すれば、商品が二重に作られません。冪等キーは成功後も24時間残し、その間に同じ入力で再実行すると、作成済みの商品を返します（`data.reused: true`）。24時間を過ぎたキーはCLIの起動時に消します。価格は50円から9,999,999円までの整数です。
 
 ### 認証情報の保存先
 
@@ -98,6 +98,8 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 - `credentials.json`：プロファイルごとのキーと接続先。平文ですが、ディレクトリ0700・ファイル0600で書きます。
 - `pending/`：ログインの待ち状態と、未完了の冪等キー。
 - 書き込みは一時ファイルを経由して置き換えます。シンボリックリンクや、所有者以外が読める権限のファイルを見つけたら、読み書きせずに止まります。
+
+**Windowsではファイル権限の検査を行いません**（権限ビットで所有者だけに絞れないため）。Windowsでは `XDG_CONFIG_HOME` を共有フォルダや同期フォルダに向けないでください。
 
 キーは発行された接続先にだけ送ります。`production`（既定）の接続先は `https://api.cozeni.net` と `https://app.cozeni.net` に固定です。キーを付けた要求はリダイレクトを追いません。
 
@@ -210,7 +212,7 @@ export default async function Page() {
 | `requireEntitlement(productId)` | page専用。権利が無ければ `enter_url` へリダイレクトする。`cozeni_handoff` の印があればリダイレクトせず `AccessDenied` を投げる（印が `unavailable` なら理由も `unavailable`） |
 | `entitlement(productId)` / `denialResponse(result, productId)` | Route Handler・Server Action用。リダイレクトしない |
 
-戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` で、Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
+戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` で、Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
 
 **リダイレクトするのはpageの入口だけです。** `requireEntitlement()` はnext/navigationの `redirect()`（制御フロー例外）を投げることがあります。呼び出しは `AccessDenied` だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。**Route Handler（JSON API）**は `entitlement()` の結果を `denialResponse()` へ渡し、401/403/503のJSONへ `enter_url` を含めます。**Server Action**はWeb Responseを返さず、`entitlement()` の結果の理由をplain objectとして返します。
 

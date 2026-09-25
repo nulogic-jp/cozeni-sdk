@@ -293,11 +293,10 @@ export async function completeLogin(
       },
     );
   };
-  const send = transport({
-    apiOrigin: pending.api_origin,
-    fetch: context.fetch,
-    timeoutMs: TIMEOUT_MS,
-  });
+  const pendingError = () =>
+    new CliError("authorization_pending", "まだ承認されていません。", {
+      hint: `利用者がブラウザで承認したら、${CLI} login --complete${profileSuffix(profile)} を再実行してください。`,
+    });
   let issued: Omit<Credential, "api_origin" | "app_origin"> | undefined;
   while (!issued) {
     const last = pending.last_polled_at
@@ -306,14 +305,28 @@ export async function completeLogin(
     const wait = Math.max(0, last + pending.interval * 1000 - context.now());
     if (context.now() + wait > deadline) {
       if (context.now() + wait >= expiresAt) throw await expired();
-      throw new CliError("authorization_pending", "まだ承認されていません。", {
-        hint: `利用者がブラウザで承認したら、${CLI} login --complete${profileSuffix(profile)} を再実行してください。`,
-      });
+      throw pendingError();
     }
     if (wait > 0) await context.sleep(wait);
+    // 待機が長引いた場合も、期限を過ぎてから要求しない。
+    if (context.now() > deadline) {
+      if (context.now() >= expiresAt) throw await expired();
+      throw pendingError();
+    }
     pending.last_polled_at = new Date(context.now()).toISOString();
     // 別の起動がすぐにポーリングして間隔を破らないよう、時刻を保存しておく。
     await store.savePending(name, pending);
+    // 1回の要求も残り時間を超えて待たない。
+    const remaining = Math.max(
+      1,
+      Math.min(TIMEOUT_MS, deadline - context.now()),
+    );
+    const clipped = remaining < TIMEOUT_MS;
+    const send = transport({
+      apiOrigin: pending.api_origin,
+      fetch: context.fetch,
+      timeoutMs: remaining,
+    });
     try {
       const { response, data } = await send("/cli/tokens", "POST", {
         device_code: pending.device_code,
@@ -344,6 +357,9 @@ export async function completeLogin(
       }
       if (error instanceof CozeniError && error.code === "expired_token")
         throw await expired();
+      // 残り時間で打ち切った要求は、通信障害ではなく承認待ちとして返す。
+      if (clipped && error instanceof CozeniError && error.code === "timeout")
+        throw pendingError();
       throw convert(error, {
         apiOrigin: pending.api_origin,
         appOrigin: pending.app_origin,
