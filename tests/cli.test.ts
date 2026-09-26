@@ -210,7 +210,7 @@ describe("login（2段階）", () => {
         verification_uri_complete: `${APP}/device?code=BCDF-GHJK`,
         user_code: "BCDF-GHJK",
         expires_at: "2026-09-25T00:10:00.000Z",
-        next_step: "npx --no cozeni login --complete",
+        next_step: "npx cozeni login --complete",
       },
     });
     // デバイスコードは出力しない。
@@ -382,7 +382,7 @@ describe("login（2段階）", () => {
     expect((await t.run("login", "--complete", "--json")).code).toBe(3);
     expect(t.parsed().error).toMatchObject({
       code: "login_required",
-      hint: expect.stringContaining("npx --no cozeni login"),
+      hint: expect.stringContaining("npx cozeni login"),
     });
     expect(t.calls).toHaveLength(0);
   });
@@ -510,7 +510,7 @@ describe("認証とエラーの案内", () => {
     const error = t.parsed().error;
     expect(error.code).toBe("key_expired");
     expect(error.message).toContain("30日");
-    expect(error.hint).toContain("npx --no cozeni login");
+    expect(error.hint).toContain("npx cozeni login");
   });
   it("401で期限内なら失効の可能性を案内する", async () => {
     await saveLogin();
@@ -789,7 +789,7 @@ describe("products", () => {
     expect(t.parsed().data).toMatchObject({
       checkout_link: null,
       reused: true,
-      next_step: "npx --no cozeni link prd_1",
+      next_step: "npx cozeni link prd_1",
     });
     expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
   });
@@ -946,7 +946,7 @@ describe("products", () => {
     expect((await t.run("products", "get", "prd_1", "--json")).code).toBe(0);
     expect(t.parsed().data).toMatchObject({
       checkout_link: null,
-      next_step: "npx --no cozeni link prd_1",
+      next_step: "npx cozeni link prd_1",
     });
   });
   it("getは存在しない商品をnot_foundで終了コード4にする", async () => {
@@ -1035,7 +1035,7 @@ describe("status", () => {
       `2. Stripeアカウントを接続してください。 ${APP}/settings/payouts`,
     ]);
     expect(data.next_step).toBe(
-      'npx --no cozeni products create --name "<商品名>" --price <円> --access-url "<URL>"',
+      'npx cozeni products create --name "<商品名>" --price <円> --access-url "<URL>"',
     );
   });
   it("販売できるなら「すぐ販売できます」と返す", async () => {
@@ -1087,14 +1087,6 @@ describe("使い方と版の照合", () => {
     expect((await t.run("unknown", "--json")).code).toBe(2);
     expect((await t.run("whoami", "--bogus", "--json")).code).toBe(2);
     expect((await t.run("whoami", "--complete", "--json")).code).toBe(2);
-  });
-  it("使い方の案内はnpxに吸われない help サブコマンドで出す", async () => {
-    const t = cli(() => json({}));
-    const { out } = await t.run("unknown", "--json");
-    // `npx --no cozeni --help` はnpx自身のヘルプを表示してしまう。
-    expect(JSON.parse(out).error.hint).toContain("npx --no cozeni help");
-    expect((await t.run("help")).out).toContain("login");
-    expect((await t.run("version")).out.trim()).toBe(version);
   });
   it("--helpと--versionは通信しない", async () => {
     const t = cli(() => json({}));
@@ -1178,7 +1170,7 @@ describe("既定のプロファイル", () => {
       }),
     );
     expect((await t.run("login", "--json")).code).toBe(0);
-    expect(t.parsed().data.next_step).toBe("npx --no cozeni login --complete");
+    expect(t.parsed().data.next_step).toBe("npx cozeni login --complete");
   });
   it("config.jsonが無ければproduction", async () => {
     await saveLogin();
@@ -1202,7 +1194,7 @@ describe("loginの冪等化とクリエイターの照合", () => {
     expect(t.parsed().data).toMatchObject({
       already_logged_in: true,
       creator_id: "cre_1",
-      next_step: "npx --no cozeni status",
+      next_step: "npx cozeni status",
     });
   });
   it.each([
@@ -1276,7 +1268,7 @@ describe("loginの冪等化とクリエイターの照合", () => {
     expect(t.parsed().data).toMatchObject({
       already_logged_in: false,
       creator_id: "cre_1",
-      next_step: "npx --no cozeni status",
+      next_step: "npx cozeni status",
     });
   });
   it("保存済みのキーのクリエイターが違えば、要求を送らずに止める", async () => {

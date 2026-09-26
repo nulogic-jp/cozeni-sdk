@@ -10,7 +10,7 @@ Node.jsサーバー、SSR、serverless function、edge function、Workerのよ�
 
 ## フレームワークへの写像
 
-1. 商品IDと購入リンクは、CLI（`npx --no cozeni products create` / `link`）の出力をコードに直接書く。購入ボタンは購入リンクへの `<a>` でよい。サーバー設定から読むのは `COZENI_SITE_ORIGIN`（自サイトのオリジン）だけで、APIオリジンは本番の `https://api.cozeni.net` を使う（Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で差し替える）。例は設定値をすべて環境変数から読むが、商品IDとリンクは定数にしてよい。再入場先（メールアドレス入力画面）は設定不要で、`checkEntitlement()` の拒否応答に含まれる `result.enterUrl` をそのまま使う。
+1. 商品IDと購入リンクは、CLI（`npx cozeni products create` / `link`）の出力をコードに直接書く。購入ボタンは購入リンクへの `<a>` でよい。サーバー設定から読むのは `COZENI_SITE_ORIGIN`（自サイトのオリジン）だけで、APIオリジンは本番の `https://api.cozeni.net` を使う（Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で差し替える）。例は設定値をすべて環境変数から読むが、商品IDとリンクは定数にしてよい。再入場先（メールアドレス入力画面）は設定不要で、`checkEntitlement()` の拒否応答に含まれる `result.enterUrl` をそのまま使う。
 2. 購入後URLで受けた `cozeni_code` をサーバーrouteで `exchangeHandoff()` に渡す。`customerCookie()` の値を `Set-Cookie` に設定し、信頼済みsite originへ303で戻す。戻り先URLには、ハンドオフ成功直後を示す秘密を含まない印（`cozeni_handoff=1`）を付ける（4を参照）。
 3. 保護ページと各データ入口で `checkEntitlement()` を呼ぶ。受信CookieはSDKへ渡せるが、SDKがCozeniへ転送するのは `cozeni_customer` だけである。HTMLを返すページ入口では、拒否結果を `enterRedirectResponse(result, productId)`（`@nulogic/cozeni-sdk`）へ渡すと、`result.enterUrl` が実際に問い合わせた`productId`を指しているときだけWeb標準Responseの303リダイレクトを得られる。JSON APIを返す入口ではこの関数を使わず、`enterUrl` はJSON本文（`enter_url`として）へ含めるだけにしてリダイレクトしない（fetchの呼び出し元をHTMLへ飛ばさないため）。
 4. **無限リダイレクトの回避**: ハンドオフのコード交換直後（`cozeni_code`を処理した直後のリクエスト、成功直後の`cozeni_handoff`付きリクエスト、または交換失敗で`cozeni_error`が付いたリクエスト）では、`enterUrl`があっても再リダイレクトせず拒否画面に留める。`cozeni_handoff`付きで権利が確認できた場合は、印を外したURLへ正規化する（表示だけに留めてもよい）。実装は [`examples/javascript-server/web-handler.mjs`](../../../examples/javascript-server/web-handler.mjs) の `members()` を正本にする。

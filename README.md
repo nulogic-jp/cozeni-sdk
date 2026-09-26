@@ -4,7 +4,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 
 | | 用途 | 管理キー |
 |---|---|---|
-| CLI（`npx --no cozeni`） | ログイン、商品の作成・更新、購入リンクの取得、販売状態の確認 | ログインで取得（手元にだけ保存） |
+| CLI（`npx cozeni`） | ログイン、商品の作成・更新、購入リンクの取得、販売状態の確認 | ログインで取得（手元にだけ保存） |
 | 管理API | 商品の作成・更新・取得、購入リンクの発行 | 必要 |
 | 購入者API | Cookieから購入権限を判定し、保護コンテンツの表示可否を決める | 不要 |
 | ハンドオフ | Cozeniの単回コードを自サイトのCookieへ交換 | 不要 |
@@ -36,14 +36,12 @@ Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは�
 ## CLI
 
 ```sh
-npx --no cozeni <コマンド> [--json] [--profile <名前>] [--yes]
+npx cozeni <コマンド> [--json] [--profile <名前>] [--yes]
 ```
 
-`init` 以外のコマンドは、SDKをプロジェクトの依存に入れてから **`npx --no cozeni`** で呼びます。`--no` を付けると、npxはプロジェクト（またはグローバル）に入っている `cozeni` だけを実行し、見つからなければレジストリから取得せずに止まります（`npx canceled due to missing packages`）。`--no` の無い `npx cozeni` は、SDKが入っていないディレクトリでは同名のパッケージを取得して実行するため、案内や自動化では使わないでください。止まったら、サイトのプロジェクトのフォルダで依存を入れ直すか、`init` を実行してください。
+`init` 以外のコマンドは、SDKをプロジェクトの依存に入れてから **`npx cozeni`** で呼びます。npxはプロジェクトに入っている `cozeni` を実行します。SDKが入っていないディレクトリでは、npm の `cozeni`（Nulogicが保持する予約パッケージ。CLIは含まない）を取得し、「Cozeni の SDK がこのプロジェクトに入っていません。」と出して終了コード1で止まります。止まったら、サイトのプロジェクトのフォルダで依存を入れ直すか、`init` を実行してください。
 
 `init` はSDKを入れる前に実行するので、スコープ付きの `npx @nulogic/cozeni-sdk@<版> init` で呼びます。
-
-使い方は `npx --no cozeni help`、版は `npx --no cozeni version` で表示します。`npx --no cozeni --help`・`--version` はnpx自身のヘルプと版を表示します（コマンド名の直後の `--help`・`--version` はnpxが受け取るため）。
 
 | コマンド | 役割 |
 |---|---|
@@ -90,7 +88,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 ```json
 {"ok":true,"data":{}}
-{"ok":false,"error":{"code":"login_required","message":"…","hint":"npx --no cozeni login を実行してください。"}}
+{"ok":false,"error":{"code":"login_required","message":"…","hint":"npx cozeni login を実行してください。"}}
 ```
 
 | 終了コード | 意味 | 代表的な `error.code` |

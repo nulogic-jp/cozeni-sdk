@@ -108,8 +108,7 @@ const help = `Cozeni CLI ${version}
   --yes                     確認を省略する（利用者に確認してから付ける）
   --profile <名前>          接続するCozeniの環境（既定: init で選んだもの、
                             無ければ production）
-  help, version             使い方・版を表示（npx から呼ぶときは --help・--version
-                            ではなくこちらを使う。npx が受け取るため）
+  --help, --version
 `;
 
 function write(context: CliContext, json: boolean, output: Output) {
@@ -182,7 +181,7 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
     throw new CliError(
       "invalid_input",
       `引数を解釈できません: ${(error as Error).message}`,
-      { hint: `${CLI} help で使い方を確認してください。` },
+      { hint: `${CLI} --help で使い方を確認してください。` },
     );
   }
 }
@@ -191,6 +190,10 @@ export async function run(context: CliContext): Promise<number> {
   const json = context.argv.includes("--json");
   try {
     const { flags, positionals } = parse(context.argv);
+    if (flags.version) {
+      context.stdout.write(`${version}\n`);
+      return 0;
+    }
     const [first, second, ...rest] = positionals;
     const name =
       first === "products" && second !== undefined
@@ -202,11 +205,6 @@ export async function run(context: CliContext): Promise<number> {
         : [second, ...rest].filter(
             (value): value is string => value !== undefined,
           );
-    // `npx --no cozeni --version` はnpxが受け取るため、サブコマンドの version も受け付ける。
-    if (flags.version || name === "version") {
-      context.stdout.write(`${version}\n`);
-      return 0;
-    }
     if (flags.help || name === undefined || name === "help") {
       context.stdout.write(help);
       return 0;
@@ -214,7 +212,7 @@ export async function run(context: CliContext): Promise<number> {
     const allowed = commands[name];
     if (!allowed)
       throw new CliError("invalid_input", `不明なコマンドです: ${name}`, {
-        hint: `${CLI} help で使い方を確認してください。`,
+        hint: `${CLI} --help で使い方を確認してください。`,
       });
     const unexpected = Object.keys(flags).filter(
       (key) => !allowed.includes(key),
@@ -223,7 +221,7 @@ export async function run(context: CliContext): Promise<number> {
       throw new CliError(
         "invalid_input",
         `${name} では使えないオプションです: ${unexpected.map((key) => `--${key}`).join(" ")}`,
-        { hint: `${CLI} help で使い方を確認してください。` },
+        { hint: `${CLI} --help で使い方を確認してください。` },
       );
     const needsId =
       name === "products get" || name === "products update" || name === "link";
@@ -231,7 +229,7 @@ export async function run(context: CliContext): Promise<number> {
       throw new CliError(
         "invalid_input",
         needsId ? "商品IDを1つ指定してください。" : "余分な引数があります。",
-        { hint: `${CLI} help で使い方を確認してください。` },
+        { hint: `${CLI} --help で使い方を確認してください。` },
       );
 
     const store = createStore(context.env);

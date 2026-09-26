@@ -14,11 +14,11 @@ metadata:
 
 Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の `@nulogic/cozeni-sdk/next`（Next.js）か共通の JS API を使う。
 
-- CLI は、最初の `init` だけ導入を依頼したプロンプトのとおり `npx @nulogic/cozeni-sdk@<版> init …` で呼び、以後は **`npx --no cozeni <コマンド> --json`** で呼ぶ（`init` が SDK をプロジェクトの依存に入れるため）。`--no` は省かない。省くと、SDK が入っていない場所で同じ名前の別のパッケージが取得・実行されうる。
-- `npx --no cozeni` が `npx canceled due to missing packages` で止まったら、SDK がこのプロジェクトに入っていない（依存を入れていない、別のフォルダで実行したなど）。サイトのプロジェクトのフォルダで依存を入れ直すか、`init` を打ち直す。
+- CLI は、最初の `init` だけ導入を依頼したプロンプトのとおり `npx @nulogic/cozeni-sdk@<版> init …` で呼び、以後は **`npx cozeni <コマンド> --json`** で呼ぶ（`init` が SDK をプロジェクトの依存に入れるため）。
+- `npx cozeni` が「Cozeni の SDK がこのプロジェクトに入っていません。」と出して止まったら、SDK がこのプロジェクトに入っていない（依存を入れていない、別のフォルダで実行したなど）。サイトのプロジェクトのフォルダで依存を入れ直すか、`init` を打ち直す。
 - 出力は1行の JSON。成功は `{"ok":true,"data":{…}}`、失敗は `{"ok":false,"error":{"code","message","hint",…}}`。失敗の付加情報（`command`・`exit_code`・`retry_after_seconds`・`request_id` など）は `error` の直下に入る（`confirmation_required` の確認内容だけは `error.details`）。
 - 成功したら `data.next_step`（次に打つコマンド。無ければ `null`）を、失敗したら `error.hint` を見て進む。`<商品名>` のような山かっこは、自分で値に置き換える部分。
-- **困ったら、まず `npx --no cozeni status --json`。** 販売状態や原因を推測で答えない。
+- **困ったら、まず `npx cozeni status --json`。** 販売状態や原因を推測で答えない。
 
 ## 導入の流れ
 
@@ -35,18 +35,18 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 2. ログイン（`login`）
 
-1. `npx --no cozeni login --json` を実行する。
+1. `npx cozeni login --json` を実行する。
    - `data.already_logged_in` が `true` なら、ログイン済み。3へ進む。
    - そうでなければ、すぐに終わって `data.verification_uri_complete`（無ければ `data.verification_uri`）と `data.user_code` を返す。
 2. 利用者に「このURLをブラウザで開き、表示されたコードが `<user_code>` と同じか確かめてから許可してください」と伝え、**許可したと返事があるまで待つ**。
-3. `npx --no cozeni login --complete --json` を実行する。
+3. `npx cozeni login --complete --json` を実行する。
    - 終了コード6（`authorization_pending`）：まだ許可されていない。利用者に許可したか確かめてから、同じコマンドを打ち直す。
    - 終了コード3（`access_denied`・`expired_token` など）：手順1の `login` からやり直す。
    - `creator_mismatch`（終了コード4）：ブラウザで別の Cozeni アカウントにログインした状態で許可された。`error.message` を利用者に伝え、正しいアカウントでブラウザにログインし直してもらってから、手順1の `login` からやり直す。
 
 ### 3. 状態の確認（`status`）
 
-`npx --no cozeni status --json` で、接続先（`data.environment`）、クリエイター、販売状態、既存の商品を確かめる。`next_actions`（審査や Stripe の手続き）があっても導入は続けてよい。最後に利用者へ伝える。
+`npx cozeni status --json` で、接続先（`data.environment`）、クリエイター、販売状態、既存の商品を確かめる。`next_actions`（審査や Stripe の手続き）があっても導入は続けてよい。最後に利用者へ伝える。
 
 ### 4. サイトのアドレス（`siteOrigin`）を決める
 
@@ -59,11 +59,11 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 `status` の `data.products` を見て、利用者に何を売るかを確かめる。
 
-- **既存の商品を使う**：`npx --no cozeni products get <商品ID> --json` で内容と購入リンクを確かめる。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx --no cozeni link <商品ID> --json` で発行する。
+- **既存の商品を使う**：`npx cozeni products get <商品ID> --json` で内容と購入リンクを確かめる。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx cozeni link <商品ID> --json` で発行する。
 - **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`）を、利用者に1回でまとめて確認する。同意を得たら次を実行する。
 
   ```sh
-  npx --no cozeni products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
+  npx cozeni products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
   ```
 
   - 同じ内容の有効な商品がすでにあれば、作らずにそれを返す（`data.reused: true`、`data.reason: "same_product_exists"`）。それを使う。`data.checkout_link` が `null` なら、利用者に確認してから `data.next_step` の `link` を実行する。
@@ -96,7 +96,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 9. 報告
 
-最後にもう一度 `npx --no cozeni status --json` を実行し、次の順で報告する。
+最後にもう一度 `npx cozeni status --json` を実行し、次の順で報告する。
 
 1. **`data.message_for_user` の各行を、言い換えずにそのまま先頭に書く**（販売できるなら「すぐ販売できます。」）。
 2. 公開先の設定：「公開しているサイトの環境変数に `COZENI_SITE_ORIGIN=<公開中のアドレス>` を設定してください。未設定だと、購入後に限定ページを開けません」。設定やデプロイは利用者が行う。自分では行わない。
@@ -145,5 +145,5 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 ```md
 ## Cozeni
 購入・販売の設定や「買えない」などの問い合わせは、Cozeni の skill に従う。
-最初に `npx --no cozeni status` で販売状態を確認する。推測で答えない。
+最初に `npx cozeni status` で販売状態を確認する。推測で答えない。
 ```
