@@ -3,6 +3,7 @@
 import { createManagementClient } from "../index.js";
 import { CozeniError, origin } from "../transport.js";
 import { CliError } from "./errors.js";
+import { CLI, INIT_CLI } from "./invocation.js";
 import {
   type Config,
   type Credential,
@@ -10,7 +11,7 @@ import {
   type Store,
 } from "./store.js";
 
-export const CLI = "npx @nulogic/cozeni-sdk";
+export { CLI, INIT_CLI };
 export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://app.cozeni.net";
 export const TIMEOUT_MS = 15000;

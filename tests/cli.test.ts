@@ -210,7 +210,7 @@ describe("login（2段階）", () => {
         verification_uri_complete: `${APP}/device?code=BCDF-GHJK`,
         user_code: "BCDF-GHJK",
         expires_at: "2026-09-25T00:10:00.000Z",
-        next_step: "npx @nulogic/cozeni-sdk login --complete",
+        next_step: "npx cozeni login --complete",
       },
     });
     // デバイスコードは出力しない。
@@ -382,7 +382,7 @@ describe("login（2段階）", () => {
     expect((await t.run("login", "--complete", "--json")).code).toBe(3);
     expect(t.parsed().error).toMatchObject({
       code: "login_required",
-      hint: expect.stringContaining("npx @nulogic/cozeni-sdk login"),
+      hint: expect.stringContaining("npx cozeni login"),
     });
     expect(t.calls).toHaveLength(0);
   });
@@ -510,7 +510,7 @@ describe("認証とエラーの案内", () => {
     const error = t.parsed().error;
     expect(error.code).toBe("key_expired");
     expect(error.message).toContain("30日");
-    expect(error.hint).toContain("npx @nulogic/cozeni-sdk login");
+    expect(error.hint).toContain("npx cozeni login");
   });
   it("401で期限内なら失効の可能性を案内する", async () => {
     await saveLogin();
@@ -789,7 +789,7 @@ describe("products", () => {
     expect(t.parsed().data).toMatchObject({
       checkout_link: null,
       reused: true,
-      next_step: "npx @nulogic/cozeni-sdk link prd_1",
+      next_step: "npx cozeni link prd_1",
     });
     expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
   });
@@ -946,7 +946,7 @@ describe("products", () => {
     expect((await t.run("products", "get", "prd_1", "--json")).code).toBe(0);
     expect(t.parsed().data).toMatchObject({
       checkout_link: null,
-      next_step: "npx @nulogic/cozeni-sdk link prd_1",
+      next_step: "npx cozeni link prd_1",
     });
   });
   it("getは存在しない商品をnot_foundで終了コード4にする", async () => {
@@ -1035,7 +1035,7 @@ describe("status", () => {
       `2. Stripeアカウントを接続してください。 ${APP}/settings/payouts`,
     ]);
     expect(data.next_step).toBe(
-      'npx @nulogic/cozeni-sdk products create --name "<商品名>" --price <円> --access-url "<URL>"',
+      'npx cozeni products create --name "<商品名>" --price <円> --access-url "<URL>"',
     );
   });
   it("販売できるなら「すぐ販売できます」と返す", async () => {
@@ -1170,9 +1170,7 @@ describe("既定のプロファイル", () => {
       }),
     );
     expect((await t.run("login", "--json")).code).toBe(0);
-    expect(t.parsed().data.next_step).toBe(
-      "npx @nulogic/cozeni-sdk login --complete",
-    );
+    expect(t.parsed().data.next_step).toBe("npx cozeni login --complete");
   });
   it("config.jsonが無ければproduction", async () => {
     await saveLogin();
@@ -1196,7 +1194,7 @@ describe("loginの冪等化とクリエイターの照合", () => {
     expect(t.parsed().data).toMatchObject({
       already_logged_in: true,
       creator_id: "cre_1",
-      next_step: "npx @nulogic/cozeni-sdk status",
+      next_step: "npx cozeni status",
     });
   });
   it.each([
@@ -1270,7 +1268,7 @@ describe("loginの冪等化とクリエイターの照合", () => {
     expect(t.parsed().data).toMatchObject({
       already_logged_in: false,
       creator_id: "cre_1",
-      next_step: "npx @nulogic/cozeni-sdk status",
+      next_step: "npx cozeni status",
     });
   });
   it("保存済みのキーのクリエイターが違えば、要求を送らずに止める", async () => {

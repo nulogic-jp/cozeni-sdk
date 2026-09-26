@@ -7,6 +7,7 @@ import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { CliError } from "./errors.js";
+import { CLI, INIT_CLI } from "./invocation.js";
 
 export interface Credential {
   api_origin: string;
@@ -217,7 +218,7 @@ export function createStore(env: Record<string, string | undefined>) {
         "invalid_state",
         `保存ファイル ${credentialsPath} を読み取れません。`,
         {
-          hint: `${credentialsPath} を削除してから、npx @nulogic/cozeni-sdk login をやり直してください。`,
+          hint: `${credentialsPath} を削除してから、${CLI} login をやり直してください。`,
         },
       );
     return file as CredentialsFile;
@@ -229,7 +230,7 @@ export function createStore(env: Record<string, string | undefined>) {
       "invalid_state",
       `設定ファイル ${configPath} を読み取れません。`,
       {
-        hint: `${configPath} を削除してから、npx @nulogic/cozeni-sdk init をやり直してください。`,
+        hint: `${configPath} を削除してから、${INIT_CLI} init をやり直してください。`,
       },
     );
   function isOrigin(value: unknown): boolean {

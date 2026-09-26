@@ -3,7 +3,13 @@
 // Next.js専用の`/next`は読み込まない（server-onlyとnext/*に依存するため）。
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { CLI, resolveProfile, session, verifyCreator } from "./api.js";
+import {
+  CLI,
+  INIT_CLI,
+  resolveProfile,
+  session,
+  verifyCreator,
+} from "./api.js";
 import {
   type CommandContext,
   createProduct,
@@ -76,6 +82,7 @@ const commands: Record<string, string[]> = {
 const help = `Cozeni CLI ${version}
 
 使い方: ${CLI} <コマンド> [オプション]
+（init だけは SDK を入れる前に打つため ${INIT_CLI} init で呼ぶ）
 
 コマンド:
   init --creator <クリエイターID>
