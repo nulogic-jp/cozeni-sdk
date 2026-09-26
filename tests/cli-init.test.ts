@@ -135,7 +135,7 @@ describe("init", () => {
       api_origin: "https://api.cozeni.net",
       app_origin: "https://app.cozeni.net",
       expected_creator_id: "cre_abc",
-      next_step: "npx @nulogic/cozeni-sdk login",
+      next_step: "npx --no cozeni login",
     });
     expect(await files(join(project, ".agents/skills/cozeni-setup"))).toEqual(
       await files(skillSource.pathname.replace(/\/$/, "")),
@@ -328,7 +328,7 @@ describe("init", () => {
     expect(t.parsed().data).toMatchObject({
       profile: "staging",
       api_origin: "https://api.staging.example",
-      next_step: "npx @nulogic/cozeni-sdk login",
+      next_step: "npx --no cozeni login",
     });
     expect(
       await createStore({ XDG_CONFIG_HOME: home }).loadConfig(),
@@ -411,7 +411,7 @@ describe("init", () => {
     const t = cli();
     const { code, out } = await t.run("init", "--creator", "cre_abc");
     expect(code).toBe(0);
-    expect(out).toContain("npx @nulogic/cozeni-sdk login");
+    expect(out).toContain("npx --no cozeni login");
     expect(out).toContain("cre_abc");
   });
 

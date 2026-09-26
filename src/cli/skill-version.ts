@@ -3,6 +3,7 @@
 // ずれていても処理は止めず、警告だけ出す。
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { INIT_CLI } from "./invocation.js";
 
 // `init`がコピーする場所（.agents・.claude）と、ほかのエージェントの場所、リポジトリ直下の`skills/`。
 const locations = [
@@ -78,7 +79,7 @@ export async function skillVersionWarning(
     }
     const range = skillRange(text);
     if (range && satisfies(version, range) === false)
-      return `警告: skill（${relative(cwd, path)}）の対応するSDKの版は ${range} ですが、実行中のCLIは ${version} です。npx @nulogic/cozeni-sdk init で skill を更新してください（初めて init するプロジェクトでは --creator <クリエイターID> も付けます。IDは whoami で確かめられます）。`;
+      return `警告: skill（${relative(cwd, path)}）の対応するSDKの版は ${range} ですが、実行中のCLIは ${version} です。${INIT_CLI} init で skill を更新してください（初めて init するプロジェクトでは --creator <クリエイターID> も付けます。IDは whoami で確かめられます）。`;
   }
   return undefined;
 }

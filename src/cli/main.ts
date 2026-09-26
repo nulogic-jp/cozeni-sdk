@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// `cozeni` コマンドの実体。案内では `npx @nulogic/cozeni-sdk <コマンド>` で呼ぶ
-// （スコープなしの名前は第三者が取得できるため、npxが別のパッケージを実行しうる）。
+// `cozeni` コマンドの実体。案内では init を `npx @nulogic/cozeni-sdk init`、
+// 以後を `npx --no cozeni <コマンド>` で呼ぶ（呼び出し名は invocation.ts）。
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { run } from "./run.js";

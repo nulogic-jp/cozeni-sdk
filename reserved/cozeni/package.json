@@ -1,0 +1,10 @@
+{
+  "name": "cozeni",
+  "version": "0.0.1",
+  "description": "Placeholder for Cozeni by Nulogic. Use @nulogic/cozeni-sdk.",
+  "license": "MIT",
+  "author": "Nulogic",
+  "repository": { "type": "git", "url": "git+https://github.com/nulogic-jp/cozeni-sdk.git" },
+  "bin": { "cozeni": "bin/cozeni.js" },
+  "files": ["bin", "README.md"]
+}

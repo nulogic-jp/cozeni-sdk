@@ -3,7 +3,13 @@
 // Next.js専用の`/next`は読み込まない（server-onlyとnext/*に依存するため）。
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { CLI, resolveProfile, session, verifyCreator } from "./api.js";
+import {
+  CLI,
+  INIT_CLI,
+  resolveProfile,
+  session,
+  verifyCreator,
+} from "./api.js";
 import {
   type CommandContext,
   createProduct,
@@ -76,6 +82,7 @@ const commands: Record<string, string[]> = {
 const help = `Cozeni CLI ${version}
 
 使い方: ${CLI} <コマンド> [オプション]
+（init だけは SDK を入れる前に打つため ${INIT_CLI} init で呼ぶ）
 
 コマンド:
   init --creator <クリエイターID>
@@ -174,7 +181,7 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
     throw new CliError(
       "invalid_input",
       `引数を解釈できません: ${(error as Error).message}`,
-      { hint: `${CLI} --help で使い方を確認してください。` },
+      { hint: `${CLI} help で使い方を確認してください。` },
     );
   }
 }
@@ -205,7 +212,7 @@ export async function run(context: CliContext): Promise<number> {
     const allowed = commands[name];
     if (!allowed)
       throw new CliError("invalid_input", `不明なコマンドです: ${name}`, {
-        hint: `${CLI} --help で使い方を確認してください。`,
+        hint: `${CLI} help で使い方を確認してください。`,
       });
     const unexpected = Object.keys(flags).filter(
       (key) => !allowed.includes(key),
@@ -214,7 +221,7 @@ export async function run(context: CliContext): Promise<number> {
       throw new CliError(
         "invalid_input",
         `${name} では使えないオプションです: ${unexpected.map((key) => `--${key}`).join(" ")}`,
-        { hint: `${CLI} --help で使い方を確認してください。` },
+        { hint: `${CLI} help で使い方を確認してください。` },
       );
     const needsId =
       name === "products get" || name === "products update" || name === "link";
@@ -222,7 +229,7 @@ export async function run(context: CliContext): Promise<number> {
       throw new CliError(
         "invalid_input",
         needsId ? "商品IDを1つ指定してください。" : "余分な引数があります。",
-        { hint: `${CLI} --help で使い方を確認してください。` },
+        { hint: `${CLI} help で使い方を確認してください。` },
       );
 
     const store = createStore(context.env);
