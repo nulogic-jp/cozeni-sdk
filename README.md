@@ -39,11 +39,11 @@ Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは�
 npx --no cozeni <コマンド> [--json] [--profile <名前>] [--yes]
 ```
 
-`init` 以外のコマンドは、SDKをプロジェクトの依存に入れてから **`npx --no cozeni`** で呼びます。`--no` を付けると、npxはプロジェクトに入っている `cozeni` だけを実行し、見つからなければレジストリから取得せずに止まります（`npx canceled due to missing packages`）。`--no` の無い `npx cozeni` は、SDKが入っていないディレクトリでは同名のパッケージを取得して実行するため、案内や自動化では使わないでください。止まったら、サイトのプロジェクトのフォルダで依存を入れ直すか、`init` を実行してください。
+`init` 以外のコマンドは、SDKをプロジェクトの依存に入れてから **`npx --no cozeni`** で呼びます。`--no` を付けると、npxはプロジェクト（またはグローバル）に入っている `cozeni` だけを実行し、見つからなければレジストリから取得せずに止まります（`npx canceled due to missing packages`）。`--no` の無い `npx cozeni` は、SDKが入っていないディレクトリでは同名のパッケージを取得して実行するため、案内や自動化では使わないでください。止まったら、サイトのプロジェクトのフォルダで依存を入れ直すか、`init` を実行してください。
 
 `init` はSDKを入れる前に実行するので、スコープ付きの `npx @nulogic/cozeni-sdk@<版> init` で呼びます。
 
-使い方は `npx --no cozeni help` で表示します。`npx --no cozeni --help` はnpx自身のヘルプを表示します（コマンド名の直後の `--help`・`--version` はnpxが受け取るため）。
+使い方は `npx --no cozeni help`、版は `npx --no cozeni version` で表示します。`npx --no cozeni --help`・`--version` はnpx自身のヘルプと版を表示します（コマンド名の直後の `--help`・`--version` はnpxが受け取るため）。
 
 | コマンド | 役割 |
 |---|---|

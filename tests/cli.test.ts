@@ -1094,6 +1094,7 @@ describe("使い方と版の照合", () => {
     // `npx --no cozeni --help` はnpx自身のヘルプを表示してしまう。
     expect(JSON.parse(out).error.hint).toContain("npx --no cozeni help");
     expect((await t.run("help")).out).toContain("login");
+    expect((await t.run("version")).out.trim()).toBe(version);
   });
   it("--helpと--versionは通信しない", async () => {
     const t = cli(() => json({}));
