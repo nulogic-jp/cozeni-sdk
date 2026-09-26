@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.5.0 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.5.1 init --creator <クリエイターID>
 ```
 
 `init` は次を行います（通信するのは package manager だけです）。
