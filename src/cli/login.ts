@@ -452,7 +452,7 @@ export async function completeLogin(
   // 別の環境のキーは保存せず、サーバーでも失効させる（接続先の設定を誤ったサーバーへの備え）。
   if (!sameEnvironment(profile, credential)) {
     await store.removePending(name);
-    await revoke(context, profile, credential);
+    await revoke(context, profile, credential, { justIssued: true });
     assertKeyEnvironment(profile, credential.api_key, "login");
     throw new CliError(
       "environment_mismatch",
@@ -472,7 +472,7 @@ export async function completeLogin(
     credential.creator_id !== profile.expectedCreatorId
   ) {
     await store.removePending(name);
-    await revoke(context, profile, credential);
+    await revoke(context, profile, credential, { justIssued: true });
     throw creatorMismatch(profile, credential.creator_id, "login");
   }
   const previous = await store.loadCredential(profile.name);
@@ -501,14 +501,21 @@ export async function completeLogin(
   };
 }
 
-/** CLIのキーをサーバーで失効させる。失敗は呼び出し側が警告として扱う。 */
+/**
+ * CLIのキーをサーバーで失効させる。失敗は呼び出し側が警告として扱う。
+ * `justIssued` は、いま同じ接続先が発行したキー（保存せずに捨てるもの）を返すときだけ付ける。
+ */
 async function revoke(
   context: LoginContext,
   profile: Profile,
   credential: Credential,
+  options: { justIssued?: boolean } = {},
 ): Promise<boolean> {
   // 固定プロファイルのキーは固定の接続先にしか送らない。書き換えられた保存ファイルに従わない。
   if (profile.fixed && credential.api_origin !== profile.apiOrigin)
+    return false;
+  // 保存済みのキーは、別の環境のものなら送らない（環境の違うキーを失効の要求で漏らさない）。
+  if (!options.justIssued && !sameEnvironment(profile, credential))
     return false;
   try {
     const send = transport(

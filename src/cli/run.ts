@@ -106,9 +106,10 @@ const help = `Cozeni CLI ${version}
 共通オプション:
   --json                    AI向けの機械可読出力（1行のJSON）
   --yes                     確認を省略する（利用者に確認してから付ける）
-  --profile <名前>          接続するCozeniの環境。production（本番）か
-                            sandbox（サンドボックス）。既定: init で選んだもの、
-                            無ければ production
+  --profile <名前>          接続するCozeniの環境。production（本番）、
+                            sandbox（サンドボックス）、または開発用に
+                            init --api-origin で作った名前。既定: init で
+                            選んだもの、無ければ production
   --help, --version
 `;
 

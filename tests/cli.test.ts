@@ -608,6 +608,37 @@ describe("sandboxプロファイル", () => {
     expect(t.parsed().error.code).toBe("environment_mismatch");
     expect(t.calls).toHaveLength(0);
   });
+  it("logoutでは、保存ファイルの別の環境のキーを送らずにローカルだけ消す", async () => {
+    await saveLogin({ api_key: sandboxKey });
+    const t = cli(() => new Response(null, { status: 204 }));
+    expect((await t.run("logout", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      removed: true,
+      revoked: false,
+      warnings: ["server_revoke_failed"],
+    });
+    expect(t.calls).toHaveLength(0);
+  });
+  it("ログインし直しても、前の別の環境のキーは失効の要求で送らない", async () => {
+    await saveLogin({ api_key: sandboxKey });
+    const t = cli(({ path }) => {
+      if (path.endsWith("/cli/device-codes")) return json(deviceCode);
+      if (path.endsWith("/cli/tokens"))
+        return json({ ...token, api_key: productionKey });
+      if (path.endsWith("/cli/logout"))
+        return new Response(null, { status: 204 });
+      return json({}, 404);
+    });
+    await t.run("login", "--json");
+    expect((await t.run("login", "--complete", "--json")).code).toBe(0);
+    expect(t.parsed().data.warnings).toContain("previous_key_not_revoked");
+    expect(
+      t.calls.some(
+        ({ headers }) =>
+          headers.get("Authorization") === `Bearer ${sandboxKey}`,
+      ),
+    ).toBe(false);
+  });
   it("一致するキーはサンドボックスの接続先へ送る", async () => {
     const t = cli(() => json({ ...account, environment: "sandbox" }), {
       env: { COZENI_API_KEY: sandboxKey },

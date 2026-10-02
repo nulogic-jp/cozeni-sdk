@@ -71,7 +71,10 @@ function deniedResponse(entitlement, asJson = false) {
  * APIキーは不要で、購入者CookieだけをCozeniへ転送する。
  */
 export function createWebHandler(config, dependencies = {}) {
-  const apiOrigin = required(config.apiOrigin, "COZENI_API_ORIGIN");
+  // 接続先はCOZENI_ENVIRONMENT（production / sandbox）で選ぶ。どちらも無ければ本番。
+  // COZENI_API_ORIGINはCozeniを手元で動かす開発時だけ指定する。
+  const apiOrigin = config.apiOrigin || undefined;
+  const environment = config.environment || undefined;
   const siteOrigin = required(config.siteOrigin, "COZENI_SITE_ORIGIN");
   const productId = required(config.productId, "COZENI_PRODUCT_ID");
   const checkoutUrl = (() => {
@@ -93,7 +96,11 @@ export function createWebHandler(config, dependencies = {}) {
   const handoffUrl = trustedSiteUrl(siteOrigin, "/cozeni/handoff");
   const customer =
     dependencies.customerClient ??
-    createCustomerClient({ apiOrigin, timeoutMs: config.timeoutMs ?? 3000 });
+    createCustomerClient({
+      apiOrigin,
+      environment,
+      timeoutMs: config.timeoutMs ?? 3000,
+    });
   const reportError = dependencies.reportError ?? ((operation) => {
     // コード、Cookie、例外本文、設定値はログへ含めない。
     console.error("[cozeni] サーバー処理エラー", { operation });
