@@ -50,6 +50,7 @@ export function createNodeServer(config, dependencies) {
 
 function environmentConfig() {
   return {
+    environment: process.env.COZENI_ENVIRONMENT,
     apiOrigin: process.env.COZENI_API_ORIGIN,
     siteOrigin: process.env.COZENI_SITE_ORIGIN,
     productId: process.env.COZENI_PRODUCT_ID,

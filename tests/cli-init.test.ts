@@ -359,6 +359,45 @@ describe("init", () => {
     ).toBe(2);
     expect(t.runCommand).not.toHaveBeenCalled();
   });
+  it("sandboxは接続先の指定なしで既定にし、接続先は保存しない", async () => {
+    const t = cli();
+    expect(
+      (
+        await t.run(
+          "init",
+          "--creator",
+          "cre_abc",
+          "--profile",
+          "sandbox",
+          "--json",
+        )
+      ).code,
+    ).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "sandbox",
+      api_origin: "https://api-sandbox.cozeni.net",
+      app_origin: "https://app-sandbox.cozeni.net",
+      next_step: "npx cozeni login",
+    });
+    expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
+      version: 1,
+      default_profile: "sandbox",
+      profiles: { sandbox: { expected_creator_id: "cre_abc" } },
+    });
+  });
+  it("sandboxの接続先も変えられない", async () => {
+    const t = cli({ env: { COZENI_API_ORIGIN: "https://api.cozeni.net" } });
+    const { code } = await t.run(
+      "init",
+      "--creator",
+      "cre_abc",
+      "--profile",
+      "sandbox",
+      "--json",
+    );
+    expect(code).toBe(2);
+    expect(t.runCommand).not.toHaveBeenCalled();
+  });
   it("他のプロファイルの設定を残す", async () => {
     const t = cli();
     await t.run(

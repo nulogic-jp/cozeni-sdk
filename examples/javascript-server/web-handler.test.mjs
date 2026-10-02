@@ -229,3 +229,33 @@ test("Node HTTP接続でもHostヘッダーをredirect先へ利用しない", as
     "https://site.example.com/members?cozeni_handoff=1",
   );
 });
+
+test("COZENI_ENVIRONMENTで接続先を選び、不正な値なら起動時に止める", async () => {
+  const { apiOrigin: _, ...withoutOrigin } = config;
+  const requested = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    requested.push(String(input));
+    return new Response(JSON.stringify({ entitled: false, reason: "no_session" }));
+  };
+  try {
+    const handle = createWebHandler(
+      { ...withoutOrigin, environment: "sandbox" },
+      { reportError: () => {} },
+    );
+    await handle(new Request("https://site.example.com/members"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.match(requested[0] ?? "", /^https:\/\/api-sandbox\.cozeni\.net\//);
+  assert.throws(() =>
+    createWebHandler({ ...withoutOrigin, environment: "staging" }),
+  );
+  assert.throws(() =>
+    createWebHandler({
+      ...config,
+      apiOrigin: "https://api.cozeni.net",
+      environment: "sandbox",
+    }),
+  );
+});

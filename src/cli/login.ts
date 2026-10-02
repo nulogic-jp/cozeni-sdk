@@ -11,12 +11,15 @@ import {
   transport,
 } from "../transport.js";
 import {
+  assertKeyEnvironment,
   boundOrigin,
   CLI,
   convert,
   creatorMismatch,
   KEY_EXPIRING_MS,
+  keyEnvironment,
   type Profile,
+  profileLabel,
   profileSuffix,
   TIMEOUT_MS,
 } from "./api.js";
@@ -239,6 +242,7 @@ export async function currentLogin(
     return undefined;
   if (profile.appOrigin !== undefined && profile.appOrigin !== saved.app_origin)
     return undefined;
+  if (!sameEnvironment(profile, saved)) return undefined;
   let apiOrigin: string;
   let client: ReturnType<typeof createManagementClient>;
   try {
@@ -275,6 +279,16 @@ export async function currentLogin(
       : [],
     next_step: `${CLI} status${profileSuffix(profile)}`,
   };
+}
+
+/** 固定プロファイルでは、キーの環境（サーバーの応答と接頭辞）がプロファイル名と一致するか。 */
+function sameEnvironment(profile: Profile, credential: Credential): boolean {
+  if (!profile.fixed) return true;
+  const prefix = keyEnvironment(credential.api_key);
+  return (
+    credential.environment === profile.name &&
+    (prefix === undefined || prefix === profile.name)
+  );
 }
 
 function validToken(
@@ -435,13 +449,30 @@ export async function completeLogin(
     app_origin: pending.app_origin,
     ...issued,
   };
+  // 別の環境のキーは保存せず、サーバーでも失効させる（接続先の設定を誤ったサーバーへの備え）。
+  if (!sameEnvironment(profile, credential)) {
+    await store.removePending(name);
+    await revoke(context, profile, credential, { justIssued: true });
+    assertKeyEnvironment(profile, credential.api_key, "login");
+    throw new CliError(
+      "environment_mismatch",
+      `接続先が ${credential.environment} の環境として応答したため、ログインを保存しませんでした。${profileLabel(profile)}（${profile.name} プロファイル）のキーではありません。`,
+      {
+        hint: `時間をおいて ${CLI} login${profileSuffix(profile)} からやり直してください。続く場合は Cozeni へお問い合わせください。`,
+        details: {
+          profile: profile.name,
+          server_environment: credential.environment,
+        },
+      },
+    );
+  }
   // 別のアカウントで許可されたキーは保存せず、サーバーでも失効させる。
   if (
     profile.expectedCreatorId &&
     credential.creator_id !== profile.expectedCreatorId
   ) {
     await store.removePending(name);
-    await revoke(context, profile, credential);
+    await revoke(context, profile, credential, { justIssued: true });
     throw creatorMismatch(profile, credential.creator_id, "login");
   }
   const previous = await store.loadCredential(profile.name);
@@ -470,14 +501,21 @@ export async function completeLogin(
   };
 }
 
-/** CLIのキーをサーバーで失効させる。失敗は呼び出し側が警告として扱う。 */
+/**
+ * CLIのキーをサーバーで失効させる。失敗は呼び出し側が警告として扱う。
+ * `justIssued` は、いま同じ接続先が発行したキー（保存せずに捨てるもの）を返すときだけ付ける。
+ */
 async function revoke(
   context: LoginContext,
   profile: Profile,
   credential: Credential,
+  options: { justIssued?: boolean } = {},
 ): Promise<boolean> {
-  // productionのキーは固定の接続先にしか送らない。書き換えられた保存ファイルに従わない。
-  if (profile.production && credential.api_origin !== profile.apiOrigin)
+  // 固定プロファイルのキーは固定の接続先にしか送らない。書き換えられた保存ファイルに従わない。
+  if (profile.fixed && credential.api_origin !== profile.apiOrigin)
+    return false;
+  // 保存済みのキーは、別の環境のものなら送らない（環境の違うキーを失効の要求で漏らさない）。
+  if (!options.justIssued && !sameEnvironment(profile, credential))
     return false;
   try {
     const send = transport(

@@ -14,14 +14,45 @@ import {
 export { CLI, INIT_CLI };
 export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://app.cozeni.net";
+export const SANDBOX_API_ORIGIN = "https://api-sandbox.cozeni.net";
+export const SANDBOX_APP_ORIGIN = "https://app-sandbox.cozeni.net";
+
+/**
+ * 接続先を固定するプロファイル。名前はサーバーが返す environment と同じにする。
+ * 上書きを受け付けないので、古い COZENI_API_ORIGIN などで別の環境につながらない。
+ */
+const FIXED_PROFILES: Record<
+  string,
+  { apiOrigin: string; appOrigin: string; label: string }
+> = {
+  production: {
+    apiOrigin: PRODUCTION_API_ORIGIN,
+    appOrigin: PRODUCTION_APP_ORIGIN,
+    label: "本番",
+  },
+  sandbox: {
+    apiOrigin: SANDBOX_API_ORIGIN,
+    appOrigin: SANDBOX_APP_ORIGIN,
+    label: "サンドボックス",
+  },
+};
+function fixedProfile(name: string) {
+  return Object.hasOwn(FIXED_PROFILES, name) ? FIXED_PROFILES[name] : undefined;
+}
+
+/** 案内に出す接続先の名前。固定プロファイルは環境名、それ以外はプロファイル名。 */
+export function profileLabel(profile: Profile): string {
+  return fixedProfile(profile.name)?.label ?? profile.name;
+}
 export const TIMEOUT_MS = 15000;
 /** ログインの期限が近いとみなす残り時間。 */
 export const KEY_EXPIRING_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface Profile {
   name: string;
-  production: boolean;
-  // 明示的な指定（production以外のプロファイルでだけ受け付ける）。
+  /** 接続先が固定のプロファイル（production・sandbox）か。 */
+  fixed: boolean;
+  // 明示的な指定（固定でないプロファイルでだけ受け付ける）。
   apiOrigin?: string;
   appOrigin?: string;
   /** init で覚えた、このプロファイルで使うはずのクリエイター。 */
@@ -48,7 +79,7 @@ function normalized(value: string, label: string): string {
 
 /**
  * --profile を省略したら config.json の default_profile、無ければ production を使う。
- * production以外の接続先は、指定 → COZENI_API_ORIGIN → config.json の順に決める。
+ * production・sandbox の接続先は固定する。それ以外は、指定 → COZENI_API_ORIGIN → config.json の順に決める。
  */
 export function resolveProfile(
   options: { profile?: string; "api-origin"?: string; "app-origin"?: string },
@@ -74,31 +105,30 @@ export function resolveProfile(
   };
   const api = options["api-origin"] ?? env.COZENI_API_ORIGIN;
   const app = options["app-origin"];
-  if (name === "production") {
-    // productionの接続先は固定する。同じ値の指定だけは受け付ける。
+  const fixed = fixedProfile(name);
+  if (fixed) {
+    // 固定プロファイルの接続先は変えられない。同じ値の指定だけは受け付ける。
     if (
-      (api !== undefined &&
-        normalized(api, "接続先") !== PRODUCTION_API_ORIGIN) ||
-      (app !== undefined &&
-        normalized(app, "--app-origin") !== PRODUCTION_APP_ORIGIN)
+      (api !== undefined && normalized(api, "接続先") !== fixed.apiOrigin) ||
+      (app !== undefined && normalized(app, "--app-origin") !== fixed.appOrigin)
     )
       throw new CliError(
         "invalid_input",
-        "production プロファイルの接続先は変更できません。",
+        `${name} プロファイルの接続先は変更できません。`,
         {
           hint: "--api-origin / --app-origin / COZENI_API_ORIGIN を外してください。別の環境へ接続する場合は --profile で別のプロファイルを指定します。",
         },
       );
     return {
       ...common,
-      production: true,
-      apiOrigin: PRODUCTION_API_ORIGIN,
-      appOrigin: PRODUCTION_APP_ORIGIN,
+      fixed: true,
+      apiOrigin: fixed.apiOrigin,
+      appOrigin: fixed.appOrigin,
     };
   }
   return {
     ...common,
-    production: false,
+    fixed: false,
     apiOrigin:
       api === undefined
         ? saved?.api_origin
@@ -110,14 +140,11 @@ export function resolveProfile(
 
 /**
  * 保存済みのキーを送ってよい接続先を返す。キーは保存時のapi_originにしか送らない。
- * productionは固定の接続先と一致しなければ、保存ファイルが書き換えられたものとみなす。
+ * 固定プロファイルは固定の接続先と一致しなければ、保存ファイルが書き換えられたものとみなす。
  */
 export function boundOrigin(profile: Profile, credential: Credential): string {
   const saved = credential.api_origin;
-  if (
-    (profile.production && saved !== PRODUCTION_API_ORIGIN) ||
-    (profile.apiOrigin !== undefined && profile.apiOrigin !== saved)
-  )
+  if (profile.apiOrigin !== undefined && profile.apiOrigin !== saved)
     throw new CliError(
       "origin_mismatch",
       `保存済みのキーは ${saved} で発行されたもので、指定された接続先（${profile.apiOrigin}）へは送れません。`,
@@ -126,6 +153,41 @@ export function boundOrigin(profile: Profile, credential: Credential): string {
       },
     );
   return saved;
+}
+
+/** キーの接頭辞から発行した環境を返す。Cozeniの形式でなければ undefined（判定はサーバーに任せる）。 */
+export function keyEnvironment(
+  apiKey: string,
+): "production" | "sandbox" | undefined {
+  if (/^cozeni_sk_sandbox_[0-9a-f]{64}$/.test(apiKey)) return "sandbox";
+  if (/^cozeni_sk_[0-9a-f]{64}$/.test(apiKey)) return "production";
+  return undefined;
+}
+
+/**
+ * 固定プロファイルで、別の環境のキーを使おうとしていれば止める。キーを送る前に呼ぶ。
+ * 本番とサンドボックスはアカウントもキーも別のため、送っても401になるだけで、取り違えに気づきにくい。
+ */
+export function assertKeyEnvironment(
+  profile: Profile,
+  apiKey: string,
+  source: "env" | "saved" | "login",
+): void {
+  const actual = keyEnvironment(apiKey);
+  if (!profile.fixed || actual === undefined || actual === profile.name) return;
+  const target = actual === "sandbox" ? "サンドボックス" : "本番";
+  const hint =
+    source === "env"
+      ? `--profile ${actual} を付けてください。${profileLabel(profile)}で使う場合は、COZENI_API_KEY を${profileLabel(profile)}のキーに替えてください。`
+      : `${CLI} login${profileSuffix(profile)} でログインし直してください。`;
+  throw new CliError(
+    "environment_mismatch",
+    `${target}のキーです。${profileLabel(profile)}（${profile.name} プロファイル）には送れません。`,
+    {
+      hint,
+      details: { profile: profile.name, key_environment: actual },
+    },
+  );
 }
 
 export interface Session {
@@ -174,6 +236,7 @@ export async function session(
     if (Date.parse(saved.expires_at) <= now) throw expired(profile);
     apiKey = saved.api_key;
   }
+  assertKeyEnvironment(profile, apiKey, envKey ? "env" : "saved");
   const credential = envKey ? undefined : saved;
   const appOrigin = profile.appOrigin ?? saved?.app_origin;
   let client: Session["client"];

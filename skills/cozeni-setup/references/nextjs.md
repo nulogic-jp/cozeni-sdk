@@ -85,6 +85,7 @@ CLI が返した購入リンクを `<a>` で置くだけ。ルートも秘密も
 | 変数 | 必要か |
 |---|---|
 | `COZENI_SITE_ORIGIN` | **必要**。自サイトのオリジン（ローカルと本番で値が違う）。`Host` ヘッダーから推測しない |
+| `COZENI_ENVIRONMENT` | サンドボックスにつなぐときだけ `sandbox`（`status` の `data.environment` が `sandbox`）。本番では設定しない |
 | `COZENI_API_ORIGIN` | 不要（既定が本番）。Cozeni を手元で動かす開発時だけ |
 
 Next.js 15 の middleware は、リダイレクト先のループバックのホスト名（`127.0.0.1`）を `localhost` に書き換える。15 のローカル開発では `COZENI_SITE_ORIGIN` とブラウザで開くURLを `localhost` に揃える（`127.0.0.1` だと購入者の Cookie が届かない）。

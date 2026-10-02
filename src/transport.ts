@@ -2,7 +2,10 @@
 // package.jsonのexportsに載せない内部モジュールで、公開APIは./index.tsだけが持つ。
 
 export interface ClientOptions {
-  apiOrigin: string;
+  /** 接続先のオリジン。省略すると environment の既知のオリジン（既定は本番）。 */
+  apiOrigin?: string;
+  /** 接続する環境。apiOrigin と両方指定したら、apiOrigin がこの環境のオリジンと一致しなければならない。 */
+  environment?: Environment;
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;
 }
@@ -81,6 +84,35 @@ export function origin(value: string): URL {
     throw new CozeniError("invalid_input");
   return url;
 }
+/** 環境ごとの既知のAPIオリジン。 */
+export const API_ORIGINS = {
+  production: "https://api.cozeni.net",
+  sandbox: "https://api-sandbox.cozeni.net",
+} as const;
+export type Environment = keyof typeof API_ORIGINS;
+
+export function isEnvironment(value: unknown): value is Environment {
+  return typeof value === "string" && Object.hasOwn(API_ORIGINS, value);
+}
+
+/**
+ * 接続先を決める。environment だけなら既知のオリジン、apiOrigin だけならそのオリジン、
+ * どちらも無ければ本番。両方あって食い違えば invalid_input にする
+ * （sandbox のつもりで本番を指すオリジンが残る取り違えを止める）。
+ */
+export function resolveApiOrigin(options: {
+  apiOrigin?: string;
+  environment?: string;
+}): string {
+  const { environment } = options;
+  if (environment !== undefined && !isEnvironment(environment))
+    throw new CozeniError("invalid_input");
+  const known = environment ? API_ORIGINS[environment] : undefined;
+  if (options.apiOrigin === undefined) return known ?? API_ORIGINS.production;
+  const given = origin(options.apiOrigin).origin;
+  if (known && given !== known) throw new CozeniError("invalid_input");
+  return given;
+}
 export function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -92,7 +124,7 @@ export type Send = (
 ) => Promise<{ response: Response; data: unknown }>;
 export function transport(options: ClientOptions, apiKey?: string): Send {
   serverOnly();
-  const base = origin(options.apiOrigin).origin;
+  const base = resolveApiOrigin(options);
   const timeoutMs = options.timeoutMs ?? 10000;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000)
     throw new CozeniError("invalid_input");

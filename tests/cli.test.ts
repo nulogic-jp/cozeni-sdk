@@ -468,6 +468,203 @@ describe("接続先の固定", () => {
   });
 });
 
+describe("sandboxプロファイル", () => {
+  const SANDBOX_API = "https://api-sandbox.cozeni.net";
+  const SANDBOX_APP = "https://app-sandbox.cozeni.net";
+  const sandboxKey = `cozeni_sk_sandbox_${"a".repeat(64)}`;
+  const productionKey = `cozeni_sk_${"b".repeat(64)}`;
+  const sandboxDeviceCode = {
+    ...deviceCode,
+    verification_uri: `${SANDBOX_APP}/device`,
+    verification_uri_complete: `${SANDBOX_APP}/device?code=BCDF-GHJK`,
+  };
+
+  it("固定の接続先でログインし、environmentがsandboxなら保存する", async () => {
+    const t = cli(({ path }) => {
+      if (path === `${SANDBOX_API}/external/v1/cli/device-codes`)
+        return json(sandboxDeviceCode);
+      if (path === `${SANDBOX_API}/external/v1/cli/tokens`)
+        return json({ ...token, api_key: sandboxKey, environment: "sandbox" });
+      return json({}, 404);
+    });
+    expect((await t.run("login", "--profile", "sandbox", "--json")).code).toBe(
+      0,
+    );
+    expect(
+      (await t.run("login", "--complete", "--profile", "sandbox", "--json"))
+        .code,
+    ).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "sandbox",
+      api_origin: SANDBOX_API,
+      environment: "sandbox",
+    });
+    expect(
+      await createStore({ XDG_CONFIG_HOME: home }).loadCredential("sandbox"),
+    ).toMatchObject({ api_origin: SANDBOX_API, app_origin: SANDBOX_APP });
+  });
+  it("接続先の上書きを受け付けない", async () => {
+    const t = cli(() => json(sandboxDeviceCode));
+    expect(
+      (
+        await t.run(
+          "login",
+          "--profile",
+          "sandbox",
+          "--api-origin",
+          API,
+          "--json",
+        )
+      ).code,
+    ).toBe(2);
+    const env = cli(() => json(sandboxDeviceCode), {
+      env: { COZENI_API_ORIGIN: API },
+    });
+    expect(
+      (await env.run("login", "--profile", "sandbox", "--json")).code,
+    ).toBe(2);
+    expect(t.calls.length + env.calls.length).toBe(0);
+  });
+  it("サーバーのenvironmentがsandboxでなければ保存せず失効させる", async () => {
+    const t = cli(({ path }) => {
+      if (path.endsWith("/cli/device-codes")) return json(sandboxDeviceCode);
+      if (path.endsWith("/cli/tokens"))
+        return json({ ...token, environment: "production" });
+      if (path.endsWith("/cli/logout"))
+        return new Response(null, { status: 204 });
+      return json({}, 404);
+    });
+    await t.run("login", "--profile", "sandbox", "--json");
+    const { code } = await t.run(
+      "login",
+      "--complete",
+      "--profile",
+      "sandbox",
+      "--json",
+    );
+    expect(code).toBe(2);
+    expect(t.parsed().error).toMatchObject({
+      code: "environment_mismatch",
+      server_environment: "production",
+    });
+    expect(t.calls.at(-1)?.path).toBe(`${SANDBOX_API}/external/v1/cli/logout`);
+    expect(
+      await createStore({ XDG_CONFIG_HOME: home }).loadCredential("sandbox"),
+    ).toBeUndefined();
+  });
+  it("本番のキーが発行されたら、environmentが合っていても保存しない", async () => {
+    const t = cli(({ path }) => {
+      if (path.endsWith("/cli/device-codes")) return json(sandboxDeviceCode);
+      if (path.endsWith("/cli/tokens"))
+        return json({
+          ...token,
+          api_key: productionKey,
+          environment: "sandbox",
+        });
+      if (path.endsWith("/cli/logout"))
+        return new Response(null, { status: 204 });
+      return json({}, 404);
+    });
+    await t.run("login", "--profile", "sandbox", "--json");
+    await t.run("login", "--complete", "--profile", "sandbox", "--json");
+    expect(t.parsed().error.code).toBe("environment_mismatch");
+    expect(
+      await createStore({ XDG_CONFIG_HOME: home }).loadCredential("sandbox"),
+    ).toBeUndefined();
+  });
+  it("COZENI_API_KEYがサンドボックスのキーなら、本番へ送らずに--profile sandboxを案内する", async () => {
+    const t = cli(() => json(account), {
+      env: { COZENI_API_KEY: sandboxKey },
+    });
+    const { code } = await t.run("whoami", "--json");
+    expect(code).toBe(2);
+    const { error } = t.parsed();
+    expect(error).toMatchObject({
+      code: "environment_mismatch",
+      profile: "production",
+      key_environment: "sandbox",
+    });
+    expect(error.message).toContain("サンドボックスのキーです");
+    expect(error.hint).toContain("--profile sandbox");
+    expect(t.calls).toHaveLength(0);
+  });
+  it("本番のキーをサンドボックスへ送らない", async () => {
+    const t = cli(() => json(account), {
+      env: { COZENI_API_KEY: productionKey },
+    });
+    const { code } = await t.run("whoami", "--profile", "sandbox", "--json");
+    expect(code).toBe(2);
+    expect(t.parsed().error).toMatchObject({
+      code: "environment_mismatch",
+      key_environment: "production",
+    });
+    expect(t.parsed().error.hint).toContain("--profile production");
+    expect(t.calls).toHaveLength(0);
+  });
+  it("保存ファイルのキーが別の環境のものなら送らない", async () => {
+    await saveLogin({ api_key: sandboxKey });
+    const t = cli(() => json(account));
+    expect((await t.run("whoami", "--json")).code).toBe(2);
+    expect(t.parsed().error.code).toBe("environment_mismatch");
+    expect(t.calls).toHaveLength(0);
+  });
+  it("logoutでは、保存ファイルの別の環境のキーを送らずにローカルだけ消す", async () => {
+    await saveLogin({ api_key: sandboxKey });
+    const t = cli(() => new Response(null, { status: 204 }));
+    expect((await t.run("logout", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      removed: true,
+      revoked: false,
+      warnings: ["server_revoke_failed"],
+    });
+    expect(t.calls).toHaveLength(0);
+  });
+  it("ログインし直しても、前の別の環境のキーは失効の要求で送らない", async () => {
+    await saveLogin({ api_key: sandboxKey });
+    const t = cli(({ path }) => {
+      if (path.endsWith("/cli/device-codes")) return json(deviceCode);
+      if (path.endsWith("/cli/tokens"))
+        return json({ ...token, api_key: productionKey });
+      if (path.endsWith("/cli/logout"))
+        return new Response(null, { status: 204 });
+      return json({}, 404);
+    });
+    await t.run("login", "--json");
+    expect((await t.run("login", "--complete", "--json")).code).toBe(0);
+    expect(t.parsed().data.warnings).toContain("previous_key_not_revoked");
+    expect(
+      t.calls.some(
+        ({ headers }) =>
+          headers.get("Authorization") === `Bearer ${sandboxKey}`,
+      ),
+    ).toBe(false);
+  });
+  it("一致するキーはサンドボックスの接続先へ送る", async () => {
+    const t = cli(() => json({ ...account, environment: "sandbox" }), {
+      env: { COZENI_API_KEY: sandboxKey },
+    });
+    const { code, out } = await t.run("whoami", "--profile", "sandbox");
+    expect(code).toBe(0);
+    expect(t.calls[0]?.path).toBe(`${SANDBOX_API}/external/v1/account`);
+    expect(out).toContain(`接続先: ${SANDBOX_API}（sandbox）`);
+  });
+  it("固定でないプロファイルでは接頭辞を照合しない", async () => {
+    const t = cli(() => json(account), {
+      env: { COZENI_API_KEY: sandboxKey },
+    });
+    const { code } = await t.run(
+      "whoami",
+      "--profile",
+      "dev",
+      "--api-origin",
+      "http://localhost:8787",
+      "--json",
+    );
+    expect(code).toBe(0);
+    expect(t.calls[0]?.path).toBe("http://localhost:8787/external/v1/account");
+  });
+});
+
 describe("認証とエラーの案内", () => {
   it("COZENI_API_KEYを保存済みの認証情報より優先する", async () => {
     await saveLogin();

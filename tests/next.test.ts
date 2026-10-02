@@ -48,8 +48,10 @@ beforeEach(() => {
   redirect.mockClear();
   vi.stubEnv("COZENI_SITE_ORIGIN", SITE);
   vi.stubEnv("COZENI_API_ORIGIN", "");
+  vi.stubEnv("COZENI_ENVIRONMENT", "");
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -305,5 +307,89 @@ describe("entitlement(productId)", () => {
       reason: "unavailable",
     });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("COZENI_ENVIRONMENT", () => {
+  const SANDBOX = "https://api-sandbox.cozeni.net";
+  it("sandboxならサンドボックスのAPIへ問い合わせる", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    api(() => json({ token: "buyer.jwt.token" }));
+    await cozeniProxy(new Request(`${SITE}/members?cozeni_code=once`));
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      `${SANDBOX}/external/v1/customer/handoff/exchange`,
+    );
+    api(() => json({ entitled: true }));
+    expect(await entitlement("prd_1")).toEqual({ entitled: true });
+    expect(String(fetch.mock.calls[0]?.[0])).toMatch(
+      new RegExp(`^${SANDBOX}/external/v1/`),
+    );
+  });
+  it("productionなら本番", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "production");
+    api(() => json({ entitled: true }));
+    await entitlement("prd_1");
+    expect(String(fetch.mock.calls[0]?.[0])).toMatch(
+      /^https:\/\/api\.cozeni\.net\//,
+    );
+  });
+  it("不明な値なら問い合わせず、unavailableと503にして理由をログに出す", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "staging");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    api(() => json({ token: "buyer.jwt.token" }));
+    expect(await entitlement("prd_1")).toEqual({
+      entitled: false,
+      reason: "unavailable",
+    });
+    const response = await cozeniProxy(
+      new Request(`${SITE}/members?cozeni_code=once`),
+    );
+    expect(response?.status).toBe(503);
+    expect(setCookies(response as Response)).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("COZENI_ENVIRONMENT"),
+    );
+    expect(JSON.stringify(error.mock.calls)).not.toContain("staging");
+  });
+  it("COZENI_API_ORIGINが別の環境を指していれば問い合わせない", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    vi.stubEnv("COZENI_API_ORIGIN", "https://api.cozeni.net");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    api(() => json({ entitled: true }));
+    expect(await entitlement("prd_1")).toEqual({
+      entitled: false,
+      reason: "unavailable",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("COZENI_API_ORIGINがその環境のオリジンなら使う", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    vi.stubEnv("COZENI_API_ORIGIN", SANDBOX);
+    api(() => json({ entitled: true }));
+    expect(await entitlement("prd_1")).toEqual({ entitled: true });
+  });
+  it("開発中は最初の問い合わせで接続先の環境名を1回だけログに出す", async () => {
+    vi.resetModules();
+    const next = await import("../src/next.js");
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    api(() => json({ entitled: true }));
+    await next.entitlement("prd_1");
+    await next.entitlement("prd_1");
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      `[cozeni] 接続先: サンドボックス（${SANDBOX}）`,
+    );
+  });
+  it("本番ビルドでは接続先をログに出さない", async () => {
+    vi.resetModules();
+    const next = await import("../src/next.js");
+    vi.stubEnv("NODE_ENV", "production");
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    api(() => json({ entitled: true }));
+    await next.entitlement("prd_1");
+    expect(info).not.toHaveBeenCalled();
   });
 });

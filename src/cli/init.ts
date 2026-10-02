@@ -17,7 +17,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CLI, resolveProfile } from "./api.js";
+import { CLI, profileLabel, resolveProfile } from "./api.js";
 import type { Output } from "./commands.js";
 import { CliError } from "./errors.js";
 import { CREATOR_ID, type Store } from "./store.js";
@@ -386,13 +386,13 @@ export async function init(
   // 再実行で既定を変えないよう、--profile が無ければ今の既定を引き継ぐ。
   const config = await store.loadConfig();
   const name = options.profile ?? config.default_profile ?? "production";
-  // production 以外の接続先は、指定が無ければ保存済みの値を使う。
+  // production・sandbox 以外の接続先は、指定が無ければ保存済みの値を使う。
   const profile = resolveProfile(
     { ...options, profile: name },
     context.env,
     config,
   );
-  if (!profile.production && (!profile.apiOrigin || !profile.appOrigin))
+  if (!profile.fixed && (!profile.apiOrigin || !profile.appOrigin))
     throw new CliError(
       "invalid_input",
       `プロファイル ${name} の接続先が指定されていません。`,
@@ -425,7 +425,7 @@ export async function init(
   config.default_profile = name;
   config.profiles[name] = {
     expected_creator_id: creator,
-    ...(profile.production
+    ...(profile.fixed
       ? {}
       : { api_origin: profile.apiOrigin, app_origin: profile.appOrigin }),
   };
@@ -439,7 +439,7 @@ export async function init(
       ? `- 販売に使う部品（${PACKAGE_NAME} ${context.version}）をこのサイトに追加しました。`
       : `- 販売に使う部品（${PACKAGE_NAME} ${context.version}）は追加済みです。`,
     `- AI 向けの手順書を置きました: ${skills.map((skill) => skill.path).join("、")}`,
-    `- 接続先: ${profile.production ? "本番" : name}（${profile.apiOrigin}）`,
+    `- 接続先: ${profileLabel(profile)}（${profile.apiOrigin}）`,
     `- 使うアカウント: ${creator}`,
     `次にやること: ${nextStep} を実行して、Cozeni にログインします。`,
   ];

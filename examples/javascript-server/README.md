@@ -17,7 +17,8 @@ Web標準の `Request` / `Response` を扱えるJavaScript／TypeScriptサーバ
 SDKリポジトリ直下でbuild後、次の非秘密設定を自分の環境に合わせます。実際の限定本文は秘密情報として扱い、公開リポジトリへcommitしないでください。
 
 ```sh
-export COZENI_API_ORIGIN=https://api.example.com
+# サンドボックスにつなぐときだけ。本番では外す。Cozeniを手元で動かす開発時はCOZENI_API_ORIGINを使う。
+export COZENI_ENVIRONMENT=sandbox
 export COZENI_SITE_ORIGIN=http://127.0.0.1:3100
 export COZENI_PRODUCT_ID=prod_example
 export COZENI_CHECKOUT_URL=https://checkout.example.com/buy/example
