@@ -16,6 +16,7 @@ import {
   enterRedirectUrl,
   trustedSiteUrl,
 } from "./index.js";
+import { API_ORIGINS, resolveApiOrigin } from "./transport.js";
 
 // このモジュールはNext.jsのバンドラ（webpack/turbopack）を通してのみ動作する。
 // "next/headers" / "next/navigation" はNext.js本体がpackage.jsonにexportsを
@@ -72,17 +73,54 @@ export class AccessDenied extends Error {
   }
 }
 
-/** 本番のAPIオリジン。開発時だけCOZENI_API_ORIGINで上書きする。 */
-export const DEFAULT_API_ORIGIN = "https://api.cozeni.net";
+/** 本番のAPIオリジン。COZENI_ENVIRONMENT=sandbox でサンドボックス、開発時はCOZENI_API_ORIGINで上書きする。 */
+export const DEFAULT_API_ORIGIN = API_ORIGINS.production;
 const HANDOFF_COOKIE = "cozeni_handoff";
 const privateHeaders = {
   "Cache-Control": "private, no-store",
   "Referrer-Policy": "no-referrer",
 };
 
-function apiOrigin(): string {
-  return process.env.COZENI_API_ORIGIN?.trim() || DEFAULT_API_ORIGIN;
+let announced = false;
+
+/**
+ * 接続先を環境変数から決める。COZENI_ENVIRONMENT（production / sandbox）で環境を選び、
+ * COZENI_API_ORIGIN があればそのオリジンを使う（両方あって食い違えば設定不備）。
+ * 設定不備は理由をログに出して undefined を返す。値そのものはログに残さない。
+ */
+function apiOrigin(): string | undefined {
+  const environment = process.env.COZENI_ENVIRONMENT?.trim() || undefined;
+  let result: string;
+  try {
+    result = resolveApiOrigin({
+      apiOrigin: process.env.COZENI_API_ORIGIN?.trim() || undefined,
+      environment,
+    });
+  } catch {
+    console.error(
+      "[cozeni] COZENI_ENVIRONMENT（production か sandbox）と COZENI_API_ORIGIN を確認してください。両方を設定する場合は、オリジンをその環境のものに合わせます。",
+    );
+    return undefined;
+  }
+  // 開発中にどちらの環境へつないでいるかを、最初の1回だけ知らせる。
+  if (!announced && process.env.NODE_ENV !== "production") {
+    announced = true;
+    const name =
+      result === API_ORIGINS.sandbox
+        ? "サンドボックス"
+        : result === API_ORIGINS.production
+          ? "本番"
+          : "開発用の接続先";
+    console.info(`[cozeni] 接続先: ${name}（${result}）`);
+  }
+  return result;
 }
+
+const misconfigured = () =>
+  new Response(
+    "接続設定を確認できません。サイト運営者へお問い合わせください。",
+    { status: 503, headers: privateHeaders },
+  );
 
 /** 受信したCookieヘッダーから、指定した名前の値を1つだけ取り出す。 */
 function cookieValue(header: string | null, name: string): string | undefined {
@@ -106,7 +144,7 @@ function markCookie(value: HandoffMark | "", secure: boolean): string {
 
 export interface HandoffOptions
   extends Pick<ClientOptions, "fetch" | "timeoutMs"> {
-  /** 既定はCOZENI_API_ORIGIN、無ければ本番。 */
+  /** 既定はCOZENI_ENVIRONMENT・COZENI_API_ORIGINから決める。無ければ本番。 */
   apiOrigin?: string;
   /** 既定はCOZENI_SITE_ORIGIN。戻り先はこのオリジンに固定し、Hostヘッダーを信用しない。 */
   siteOrigin?: string;
@@ -180,11 +218,10 @@ export async function handleCozeniHandoff(
   } catch {
     // 戻り先を安全に決められないので、コードを交換しない（ログに値を残さない）。
     console.error("[cozeni] COZENI_SITE_ORIGIN を確認してください。");
-    return new Response(
-      "接続設定を確認できません。サイト運営者へお問い合わせください。",
-      { status: 503, headers: privateHeaders },
-    );
+    return misconfigured();
   }
+  const api = options.apiOrigin ?? apiOrigin();
+  if (!api) return misconfigured();
   const secure = target.protocol === "https:";
   const headers = new Headers({ ...privateHeaders, Location: target.href });
   let mark: HandoffMark;
@@ -193,7 +230,7 @@ export async function handleCozeniHandoff(
   else {
     try {
       const { token } = await createCustomerClient({
-        apiOrigin: options.apiOrigin ?? apiOrigin(),
+        apiOrigin: api,
         fetch: options.fetch,
         timeoutMs: options.timeoutMs ?? 5000,
       }).exchangeHandoff(code);
@@ -238,13 +275,16 @@ export async function cozeniProxy(
 
 /**
  * Route Handler・Server Action用。リダイレクトせずに権利の判定結果を返す。
- * 接続先はCOZENI_API_ORIGIN、無ければ本番。
+ * 接続先はCOZENI_ENVIRONMENT・COZENI_API_ORIGINから決め、無ければ本番。
+ * 設定が不正ならunavailableを返す。
  */
-export function entitlement(
+export async function entitlement(
   productId: string,
   options: Pick<ClientOptions, "fetch" | "timeoutMs"> = {},
 ): Promise<Entitlement> {
-  return nextEntitlement({ ...options, apiOrigin: apiOrigin(), productId });
+  const api = apiOrigin();
+  if (!api) return { entitled: false, reason: "unavailable" };
+  return nextEntitlement({ ...options, apiOrigin: api, productId });
 }
 
 export interface RequireEntitlementOptions extends NextEntitlementOptions {

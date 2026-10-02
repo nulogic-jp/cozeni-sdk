@@ -33,6 +33,32 @@ skillは、いつどのCLIを呼ぶか、コードのどこに何を書くか、
 
 Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは、この `init` を最初の1コマンドとしてAIに渡します。以後AIは、CLIの出力（`next_step`・`error.hint`）とskillに従って進みます。導入プロンプトを使わず、以下のリファレンスだけを見て自分で実装することもできます。その場合も `examples/` の実装が完全な参照になります。
 
+## サンドボックス
+
+本番とは別のアカウント・データで、実際の請求なしに導入を試せる環境です。Stripeはテストモードで動き、テストカードで購入できます。本番のアカウント・キー・商品はサンドボックスでは使えません（逆も同じです）。
+
+| | 本番（既定） | サンドボックス |
+|---|---|---|
+| CLI | 指定なし（`production` プロファイル） | `--profile sandbox` |
+| SDK（サイト） | 指定なし | 環境変数 `COZENI_ENVIRONMENT=sandbox` |
+| API | `https://api.cozeni.net` | `https://api-sandbox.cozeni.net` |
+| 管理画面・購入リンク | `https://app.cozeni.net` | `https://app-sandbox.cozeni.net` |
+| APIキー | `cozeni_sk_` + 64桁 | `cozeni_sk_sandbox_` + 64桁 |
+
+- `init --profile sandbox` で既定のプロファイルを `sandbox` にすると、以後のCLIは指定なしでサンドボックスにつながります。ログインもサンドボックスのアカウントで別に行います。
+- CLIは、サンドボックスのキーを本番へ、本番のキーをサンドボックスへ送ろうとすると、送らずに `environment_mismatch` で止まります（`COZENI_API_KEY` も同じです）。
+- `COZENI_ENVIRONMENT` は `production` か `sandbox` だけを受け付けます。ほかの値や、`COZENI_API_ORIGIN` が別の環境を指しているときは問い合わせず、購入者には `unavailable` として扱い、理由をサーバーのログに出します。開発サーバー（`NODE_ENV` が `production` 以外）では、最初の問い合わせで接続先の環境名をログに出します。
+
+### 本番へ移る
+
+商品・購入リンク・アカウントは環境ごとに別のため、サンドボックスで作ったものは本番では使えません。
+
+1. 本番の管理画面でアカウントを用意し、本番で `init` をやり直す（`npx @nulogic/cozeni-sdk@<版> init --creator <本番のクリエイターID> --profile production`）。続けて `npx cozeni login` する。
+2. 本番で商品を作り直し（`npx cozeni products create`）、コード中の商品IDと購入リンクを本番のものに差し替える。
+3. サイトの環境変数から `COZENI_ENVIRONMENT` を外す（または `production` にする）。
+
+サンドボックスの商品IDが本番のコードに残っていても、本番では権利が無い（`no_grant`）として扱われるだけで、エラーにはなりません。差し替え漏れは `npx cozeni products get <商品ID>` で確かめてください。
+
 ## CLI
 
 ```sh
@@ -79,7 +105,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 `init` は `$XDG_CONFIG_HOME/cozeni/config.json` に、既定のプロファイル（`default_profile`）と、プロファイルごとの期待するクリエイター（`expected_creator_id`）を保存します。秘密は含みません。
 
 - `--profile` を省略すると、`default_profile`（無ければ `production`）を使います。`init` の `--profile` の既定は `production` です。
-- `production` の接続先は固定です。それ以外のプロファイルは、`init` で `--api-origin` と `--app-origin` を必須にし、プロファイルと一緒に保存します。以後のコマンドでは省略できます（指定 → `COZENI_API_ORIGIN` → 保存した値の順）。保存済みのキーは、発行されたオリジンにしか送りません。
+- `production`（本番）と `sandbox`（サンドボックス）の接続先は固定で、`--api-origin`・`--app-origin`・`COZENI_API_ORIGIN` での変更を受け付けません。ログインでサーバーが返す環境がプロファイル名と違えば、キーを保存しません。それ以外のプロファイルは、`init` で `--api-origin` と `--app-origin` を必須にし、プロファイルと一緒に保存します。以後のコマンドでは省略できます（指定 → `COZENI_API_ORIGIN` → 保存した値の順）。保存済みのキーは、発行されたオリジンにしか送りません。
 - 期待するクリエイターがあるプロファイルでは、使うキーのクリエイター（保存したキーなら保存値、`COZENI_API_KEY` なら `GET /account` の結果）が違えば、変更系の要求を送る前に `creator_mismatch` で止まります。
 
 ### 出力と終了コード
@@ -95,7 +121,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 |---|---|---|
 | 0 | 成功 | — |
 | 1 | 想定外のエラー | `internal`・`invalid_response`・`insecure_storage`・`invalid_state`・`install_failed`・`package_manager_conflict`・`unsafe_path` |
-| 2 | 使い方の誤り・確認が必要 | `invalid_input`・`confirmation_required`・`origin_mismatch` |
+| 2 | 使い方の誤り・確認が必要 | `invalid_input`・`confirmation_required`・`origin_mismatch`・`environment_mismatch` |
 | 3 | ログインが必要 | `login_required`・`key_expired`・`access_denied`・`expired_token` |
 | 4 | 権限・規約・状態で拒否 | `terms_consent_required`・`forbidden`・`not_found`・`product_archived`・`idempotency_conflict`・`creator_mismatch` |
 | 5 | 通信できない・一時障害 | `network_unreachable`・`unexpected_redirect`・`rate_limited`・`unavailable` |
@@ -122,7 +148,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 **Windowsではファイル権限の検査を行いません**（権限ビットで所有者だけに絞れないため）。Windowsでは `XDG_CONFIG_HOME` を共有フォルダや同期フォルダに向けないでください。
 
-キーは発行された接続先にだけ送ります。`production`（既定）の接続先は `https://api.cozeni.net` と `https://app.cozeni.net` に固定です。キーを付けた要求はリダイレクトを追いません。
+キーは発行された接続先にだけ送ります。`production`（既定）の接続先は `https://api.cozeni.net` と `https://app.cozeni.net`、`sandbox` は `https://api-sandbox.cozeni.net` と `https://app-sandbox.cozeni.net` に固定です。キーを付けた要求はリダイレクトを追いません。
 
 環境変数 `COZENI_API_KEY` があれば、保存したキーより優先して使います（CIなど向け）。`logout` はこのキーを失効させません。
 
@@ -183,6 +209,8 @@ const response = enterRedirectResponse(result, productId); // Web標準Response(
 
 `exchangeHandoff(code)` は60秒・単回のコードを `{token}` へ交換します。結果は `customerCookie` で自サイトのHttpOnly Cookieへ保存します。信頼originはサーバー設定から指定し、Hostヘッダーから組み立てません。
 
+接続先は `apiOrigin` か `environment`（`"production"` / `"sandbox"`）で指定します。どちらも無ければ本番です。両方を渡した場合、`apiOrigin` がその環境のオリジンと違えば作成時に `invalid_input` を投げます。
+
 両clientに `fetch` と `timeoutMs`（既定10秒）を注入できます。エラーは `CozeniError`（`code` / `status` / `requestId` / `retryAfterSeconds`）で、秘密や生の応答を保持しません。
 
 ## JavaScript / TypeScriptサーバーの導入例
@@ -232,7 +260,7 @@ export default async function Page() {
 | `requireEntitlement(productId)` | page専用。権利が無ければ `enter_url` へリダイレクトする。`cozeni_handoff` の印があればリダイレクトせず `AccessDenied` を投げる（印が `unavailable` なら理由も `unavailable`） |
 | `entitlement(productId)` / `denialResponse(result, productId)` | Route Handler・Server Action用。リダイレクトしない |
 
-戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` で、Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
+戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
 
 **リダイレクトするのはpageの入口だけです。** `requireEntitlement()` はnext/navigationの `redirect()`（制御フロー例外）を投げることがあります。呼び出しは `AccessDenied` だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。**Route Handler（JSON API）**は `entitlement()` の結果を `denialResponse()` へ渡し、401/403/503のJSONへ `enter_url` を含めます。**Server Action**はWeb Responseを返さず、`entitlement()` の結果の理由をplain objectとして返します。
 

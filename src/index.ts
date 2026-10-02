@@ -9,7 +9,11 @@ import {
   transport,
 } from "./transport.js";
 
-export type { ClientOptions, ManagementClientOptions } from "./transport.js";
+export type {
+  ClientOptions,
+  Environment,
+  ManagementClientOptions,
+} from "./transport.js";
 export { CozeniError } from "./transport.js";
 
 export type Scope =

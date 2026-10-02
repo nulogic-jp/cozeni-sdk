@@ -79,7 +79,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 - **それ以外の JavaScript / TypeScript サーバー**：[references/javascript-server.md](references/javascript-server.md)
 - 静的ファイルだけのサイトでは限定ページを守れない。サーバーの処理（SSR・serverless function・Worker など）が無ければ、作業を止めて利用者に説明する。
 
-手元の環境変数（例：`.env.local`）に `COZENI_SITE_ORIGIN=<siteOrigin>` を設定する。サイトに必要な環境変数はこれだけで、API キーは使わない。
+手元の環境変数（例：`.env.local`）に `COZENI_SITE_ORIGIN=<siteOrigin>` を設定する。`status` の `data.environment` が `sandbox` なら、`COZENI_ENVIRONMENT=sandbox` も設定する（無いとサイトが本番の Cozeni に問い合わせ、サンドボックスの商品の購入者を認められない）。サイトに必要な環境変数はこれだけで、API キーは使わない。
 
 ### 7. 動作確認
 
@@ -114,7 +114,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 |---|---|---|
 | 0 | 成功 | `data.next_step` があれば、それが次のコマンド |
 | 1 | 想定外のエラー | `error.message` を利用者に伝える。`install_failed` なら `error.command` を実行して原因を確かめる。`package_manager_conflict`・`unsafe_path` は上の「1. 準備」 |
-| 2 | 使い方の誤り・確認が必要 | 引数を直す。`confirmation_required` なら利用者に確認して `--yes` を付ける |
+| 2 | 使い方の誤り・確認が必要 | 引数を直す。`confirmation_required` なら利用者に確認して `--yes` を付ける。`environment_mismatch` は本番とサンドボックスのキーの取り違えで、`error.hint` に従う |
 | 3 | ログインが必要 | `login` からやり直す。`key_expired` は30日の期限切れで、異常ではない |
 | 4 | 権限・規約・状態で拒否 | `terms_consent_required` なら、利用者に管理画面で規約への同意を頼む。`creator_mismatch` は別のアカウントのキー。`error.hint` に従う |
 | 5 | 通信できない・一時障害 | 下の「通信できないとき」。`rate_limited` は `error.retry_after_seconds` 秒待って再実行する |

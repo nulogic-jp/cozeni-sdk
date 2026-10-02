@@ -353,6 +353,55 @@ describe("購入者API", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+describe("接続する環境", () => {
+  const checked = async (
+    options: Parameters<typeof createCustomerClient>[0],
+  ) => {
+    const fetch = vi.fn().mockResolvedValue(ok({ entitled: true }));
+    await createCustomerClient({ ...options, fetch }).checkEntitlement({
+      productId: "p",
+    });
+    return String(fetch.mock.calls[0]?.[0]);
+  };
+  it("environmentで接続先を選び、どちらも無ければ本番", async () => {
+    expect(await checked({ environment: "sandbox" })).toMatch(
+      /^https:\/\/api-sandbox\.cozeni\.net\/external\/v1\//,
+    );
+    expect(await checked({ environment: "production" })).toMatch(
+      /^https:\/\/api\.cozeni\.net\/external\/v1\//,
+    );
+    expect(await checked({})).toMatch(/^https:\/\/api\.cozeni\.net\//);
+  });
+  it("apiOriginがその環境のオリジンと一致すれば使う", async () => {
+    expect(
+      await checked({
+        environment: "sandbox",
+        apiOrigin: "https://api-sandbox.cozeni.net",
+      }),
+    ).toMatch(/^https:\/\/api-sandbox\.cozeni\.net\//);
+  });
+  it("不明な環境や、環境と食い違うapiOriginは作成時に拒否する", () => {
+    expect(() =>
+      createCustomerClient({
+        environment: "staging" as "sandbox",
+      }),
+    ).toThrow(CozeniError);
+    expect(() =>
+      createCustomerClient({
+        environment: "sandbox",
+        apiOrigin: "https://api.cozeni.net",
+      }),
+    ).toThrow(CozeniError);
+    expect(() =>
+      createManagementClient({
+        environment: "sandbox",
+        apiOrigin,
+        apiKey: "cozeni_sk_test",
+      }),
+    ).toThrow(CozeniError);
+  });
+});
+
 describe("enter_urlへのリダイレクト判定（フレームワーク非依存ヘルパー）", () => {
   const productId = "prd_x";
   const enterUrl = `https://checkout.example/enter?product_id=${productId}`;

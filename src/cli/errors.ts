@@ -6,6 +6,7 @@ const exitCodes: Record<string, number> = {
   confirmation_required: 2,
   cancelled: 2,
   origin_mismatch: 2,
+  environment_mismatch: 2,
   login_required: 3,
   key_expired: 3,
   access_denied: 3,
