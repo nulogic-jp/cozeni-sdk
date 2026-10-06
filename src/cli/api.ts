@@ -16,6 +16,9 @@ export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://app.cozeni.net";
 export const SANDBOX_API_ORIGIN = "https://api-sandbox.cozeni.net";
 export const SANDBOX_APP_ORIGIN = "https://app-sandbox.cozeni.net";
+// 購入者面（checkout・enter）。管理画面とは別のサブドメインに置かれる（本体 docs N-2）。
+export const PRODUCTION_CHECKOUT_ORIGIN = "https://checkout.cozeni.net";
+export const SANDBOX_CHECKOUT_ORIGIN = "https://checkout-sandbox.cozeni.net";
 
 /**
  * 接続先を固定するプロファイル。名前はサーバーが返す environment と同じにする。
@@ -23,21 +26,33 @@ export const SANDBOX_APP_ORIGIN = "https://app-sandbox.cozeni.net";
  */
 const FIXED_PROFILES: Record<
   string,
-  { apiOrigin: string; appOrigin: string; label: string }
+  {
+    apiOrigin: string;
+    appOrigin: string;
+    checkoutOrigin: string;
+    label: string;
+  }
 > = {
   production: {
     apiOrigin: PRODUCTION_API_ORIGIN,
     appOrigin: PRODUCTION_APP_ORIGIN,
+    checkoutOrigin: PRODUCTION_CHECKOUT_ORIGIN,
     label: "本番",
   },
   sandbox: {
     apiOrigin: SANDBOX_API_ORIGIN,
     appOrigin: SANDBOX_APP_ORIGIN,
+    checkoutOrigin: SANDBOX_CHECKOUT_ORIGIN,
     label: "サンドボックス",
   },
 };
 function fixedProfile(name: string) {
   return Object.hasOwn(FIXED_PROFILES, name) ? FIXED_PROFILES[name] : undefined;
+}
+
+/** 購入者面のオリジン。固定プロファイルだけが持つ（それ以外は分からないので undefined）。 */
+export function checkoutOrigin(profile: Profile): string | undefined {
+  return profile.fixed ? fixedProfile(profile.name)?.checkoutOrigin : undefined;
 }
 
 /** 案内に出す接続先の名前。固定プロファイルは環境名、それ以外はプロファイル名。 */

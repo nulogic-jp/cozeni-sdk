@@ -9,6 +9,7 @@ import {
   type Send,
 } from "../transport.js";
 import {
+  checkoutOrigin,
   convert,
   PRODUCTION_API_ORIGIN,
   type Profile,
@@ -373,7 +374,7 @@ async function checkUnpurchased(
   site: URL,
   page: PagePath,
   productId: string,
-  appOrigin: string | undefined,
+  enterOrigin: string | undefined,
 ): Promise<UnpurchasedResult> {
   const url = pageUrl(site, page);
   url.searchParams.delete("cozeni_code");
@@ -402,7 +403,8 @@ async function checkUnpurchased(
       reason: "unexpected_destination",
       hint: "未購入のとき、Cozeni の入場画面（enter_url）以外へ送られました。限定ページの実装を確かめてください。",
     };
-  if (appOrigin && target.origin !== appOrigin)
+  // enter_url は購入者面のオリジンで組み立てられる（管理画面のオリジンではない）。
+  if (enterOrigin && target.origin !== enterOrigin)
     return {
       redirected: false,
       reason: "enter_url_other_environment",
@@ -534,7 +536,7 @@ export async function testPurchase(
     site,
     page,
     productId,
-    current.appOrigin,
+    checkoutOrigin(current.profile),
   );
   if (!entry.entered || !unpurchased.redirected) {
     const failed = !entry.entered ? entry : unpurchased;
