@@ -33,7 +33,7 @@ export interface Output {
 const yen = (value: number) => `${value.toLocaleString("ja-JP")}円`;
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
-async function call<T>(
+export async function call<T>(
   session: Session,
   context: CommandContext,
   request: () => Promise<T>,
@@ -120,6 +120,17 @@ const blockerMessages: Record<SalesBlocker["code"], string> = {
   stripe_verification_pending: "Stripeの本人確認の完了を待ってください。",
 };
 
+// サンドボックスでは、Stripe の連携は本番と同じ画面でテストデータを使って行う（V-21）。
+// 名前の「サンドボックス」は登録をお願いするときに1回だけ出し、以後は「テスト」と呼ぶ（V-25）。
+const SANDBOX_STRIPE_STEPS =
+  "Stripe の画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力してください。";
+const sandboxBlockerMessages: Partial<Record<SalesBlocker["code"], string>> = {
+  stripe_not_connected: `テスト用の Stripe 連携をお願いします。${SANDBOX_STRIPE_STEPS}`,
+  stripe_onboarding_incomplete: `テスト用の Stripe 連携を完了してください。${SANDBOX_STRIPE_STEPS}`,
+  stripe_verification_pending:
+    "テスト用の Stripe 連携の確認が終わるのを待ってください。",
+};
+
 export async function status(
   session: Session,
   context: CommandContext,
@@ -129,11 +140,14 @@ export async function status(
   );
   const products = await allProducts(session, context);
   const sales = account.sales ?? null;
+  const sandbox = account.environment === "sandbox";
   const nextActions = (sales?.blockers ?? []).map((blocker) => ({
     code: blocker.code,
     action_url: blocker.action_url,
     message:
-      blockerMessages[blocker.code] ?? "管理画面で状況を確認してください。",
+      (sandbox ? sandboxBlockerMessages[blocker.code] : undefined) ??
+      blockerMessages[blocker.code] ??
+      "管理画面で状況を確認してください。",
     ...(blocker.code === "review_rejected"
       ? { rejection: blocker.rejection }
       : {}),
@@ -177,12 +191,33 @@ export async function status(
       message_for_user: messageForUser,
       products,
       warnings,
-      next_step: products.some((product) => product.status === "active")
-        ? null
-        : `${CLI} products create --name "<商品名>" --price <円> --access-url "<URL>"${profileSuffix(session.profile)}`,
+      next_step: statusNextStep(session, sandbox, nextActions, products),
     },
     human,
   };
+}
+
+/** 次に打つコマンド。サンドボックスで Stripe の連携が未完了なら、利用者への依頼を AI への指示として返す（V-21）。 */
+function statusNextStep(
+  session: Session,
+  sandbox: boolean,
+  actions: { code: string; action_url: string }[],
+  products: Product[],
+): string | null {
+  const create = `${CLI} products create --name "<商品名>" --price <円> --access-url "<URL>"${profileSuffix(session.profile)}`;
+  const hasProduct = products.some((product) => product.status === "active");
+  const stripe = actions.filter(
+    (action) =>
+      action.code === "stripe_not_connected" ||
+      action.code === "stripe_onboarding_incomplete",
+  );
+  if (sandbox && stripe.length > 0)
+    return [
+      `商品名・価格・限定にするページの確認と同じ1通で、利用者にテスト用の Stripe 連携を頼みます（${SANDBOX_STRIPE_STEPS.replace(/ください。$/, "")}）。案内するURL: ${stripe.map((action) => action.action_url).join(" ")}`,
+      `連携の完了を待たずに、商品の作成とサイトへの組み込みを進めます。\`${CLI} test-purchase\` の前に、もう一度 \`${CLI} status --json\` で連携が済んだか（sales.can_sell）を確かめます。`,
+      ...(hasProduct ? [] : [`商品は \`${create}\` で作ります。`]),
+    ].join("\n");
+  return hasProduct ? null : create;
 }
 
 /** 利用者にそのまま見せられる「次にやること」。AI が言い換えずに伝えられるよう、ここで文を作る。 */

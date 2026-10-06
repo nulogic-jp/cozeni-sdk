@@ -55,7 +55,9 @@ export interface Instructions {
   next_step: string;
 }
 
-const COMPLETE_WAIT_MS = 90_000;
+export const COMPLETE_WAIT_MS = 90_000;
+/** サーバーが間隔を指定しないときの既定（RFC 8628）。テスト購入の打ち直しもこれに合わせる。 */
+export const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const pendingName = (profile: Profile) => `login-${profile.name}`;
 
 function invalidResponse(): CliError {
@@ -109,6 +111,16 @@ function isPending(value: unknown): value is PendingLogin {
   );
 }
 
+// サンドボックスの名前は、登録をお願いするときに1回だけ説明する（V-25）。
+function sandboxNextStep(profile: Profile): string {
+  const complete = `${CLI} login --complete${profileSuffix(profile)}`;
+  return [
+    "利用者に承認URLとコードを伝え、コードが一致するか確かめて許可してもらいます。",
+    "初めてのときは、この1回だけ「実際にはお金が動かないテスト用の環境（サンドボックス）」と説明し、まだ登録していなければ承認の画面から会員登録してもらいます（メール確認のあと、承認の画面に戻ります）。審査の申請は求めません。以後は「テスト」と呼びます。",
+    `許可の返事を待ち、\`${complete}\` を実行します。未承認なら終了コード6なので、利用者に確かめて打ち直します。`,
+  ].join("\n");
+}
+
 function instructions(pending: PendingLogin, profile: Profile): Instructions {
   return {
     verification_uri: pending.verification_uri,
@@ -117,7 +129,10 @@ function instructions(pending: PendingLogin, profile: Profile): Instructions {
       : {}),
     user_code: pending.user_code,
     expires_at: pending.expires_at,
-    next_step: `${CLI} login --complete${profileSuffix(profile)}`,
+    next_step:
+      profile.name === "sandbox"
+        ? sandboxNextStep(profile)
+        : `${CLI} login --complete${profileSuffix(profile)}`,
   };
 }
 
@@ -223,6 +238,11 @@ export interface LoginResult {
   credentials_path: string;
   warnings: string[];
   next_step: string;
+  /** 本番のログインで既定のプロファイルを本番に切り替えたとき（V-23）だけ付く。 */
+  default_profile?: string;
+  switched_to_production?: boolean;
+  /** ログインを待つあいだに導入の設定が変わり、切り替えなかったとき。 */
+  switch_aborted?: boolean;
 }
 
 /**
