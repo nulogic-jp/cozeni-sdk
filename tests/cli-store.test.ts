@@ -42,7 +42,7 @@ describe("認証情報の保存", () => {
     const store = createStore({ XDG_CONFIG_HOME: home });
     await store.saveCredential("production", {
       api_origin: "https://api.cozeni.net",
-      app_origin: "https://app.cozeni.net",
+      app_origin: "https://cozeni.net",
       api_key: "k",
       key_id: "key_1",
       creator_id: "crt_1",
@@ -99,7 +99,7 @@ describe("安全でない保存状態の拒否", () => {
     await expect(
       store.saveCredential("production", {
         api_origin: "https://api.cozeni.net",
-        app_origin: "https://app.cozeni.net",
+        app_origin: "https://cozeni.net",
         api_key: "k",
         key_id: "key_1",
         creator_id: "crt_1",

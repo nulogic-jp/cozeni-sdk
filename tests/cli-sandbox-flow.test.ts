@@ -7,7 +7,7 @@ import { type CliContext, run } from "../src/cli/run.js";
 import { createStore } from "../src/cli/store.js";
 
 const PROD_API = "https://api.cozeni.net";
-const PROD_APP = "https://app.cozeni.net";
+const PROD_APP = "https://cozeni.net";
 const SBX_API = "https://api-sandbox.cozeni.net";
 const SBX_APP = "https://app-sandbox.cozeni.net";
 // 購入者面（checkout / enter）。本体は enter_url を CHECKOUT_BASE_URL から組み立てる（N-2）。
