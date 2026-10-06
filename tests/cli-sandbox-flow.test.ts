@@ -775,7 +775,12 @@ describe("test-purchase", () => {
         refunded: false,
         reason: "enter_url_other_environment",
       });
-      expect(t.parsed().error.hint).toContain("COZENI_ENVIRONMENT=sandbox");
+      // 実際の転送先と期待したオリジンを示す。
+      const { hint } = t.parsed().error;
+      expect(hint).toContain(`${new URL(enter).origin}/enter`);
+      expect(hint).toContain(`${SBX_CHECKOUT}/enter`);
+      expect(hint).toContain("proxy");
+      expect(hint).toContain("購入リンク");
       expect(t.calls.some((call) => call.url === refund)).toBe(false);
     },
   );

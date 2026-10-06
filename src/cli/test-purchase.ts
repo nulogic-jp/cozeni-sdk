@@ -408,7 +408,7 @@ async function checkUnpurchased(
     return {
       redirected: false,
       reason: "enter_url_other_environment",
-      hint: "入場画面が別の環境の Cozeni でした。サイトの環境変数に COZENI_ENVIRONMENT=sandbox が設定され、開発サーバーを再起動したか確かめてください。",
+      hint: `未購入のとき ${target.origin}${target.pathname} へ送られましたが、この接続先の入場画面は ${enterOrigin}${target.pathname} です。サイトの proxy の設定（どの環境の Cozeni に問い合わせているか）と、購入リンクがこの接続先のもの（${enterOrigin}/checkout/…）かを確かめてください。`,
     };
   return { redirected: true };
 }
