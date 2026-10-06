@@ -49,6 +49,19 @@ export const SWITCH_ABORTED_NEXT_STEP = [
   `別の導入が進んでいないか確かめ、本番に切り替えるなら、\`${CLI} login --profile production --json\` からやり直してください。`,
 ].join("\n");
 
+/** 導入の流れが保存されていない（0.6.0 より前の）設定のときの案内。切り替えは行わない。 */
+export const FLOW_UNKNOWN_HINT = `導入の流れを確かめるため、本番の管理画面の導入プロンプトの init（\`init --creator <クリエイターID>\`）をやり直してください。やり直したあと、\`${CLI} login --profile production --json\` から本番への切り替えを進めます。`;
+
+/** 導入の流れが未保存なのに、本番への切り替えの対象になりそうな状態か。 */
+export function flowUnknown(profile: Profile, config: Config): boolean {
+  return (
+    profile.name === "production" &&
+    config.default_profile === "sandbox" &&
+    config.flow === undefined &&
+    profile.expectedCreatorId !== undefined
+  );
+}
+
 /**
  * 既定のプロファイルを production に書き換える。待ち時間のあいだに設定が変わっていてもよいよう、
  * 最新の設定を読み直し、導入の流れと期待するクリエイターがログイン結果と一致するときだけ、
@@ -96,6 +109,12 @@ export async function switchToProduction(
       },
     );
   const previous = config.default_profile ?? "production";
+  if (previous !== "production" && config.flow === undefined)
+    throw new CliError(
+      "invalid_input",
+      "導入の流れが保存されていないため、本番へ切り替えられません。",
+      { hint: FLOW_UNKNOWN_HINT },
+    );
   if (previous !== "production" && config.flow !== "sandbox-first")
     throw new CliError(
       "invalid_input",

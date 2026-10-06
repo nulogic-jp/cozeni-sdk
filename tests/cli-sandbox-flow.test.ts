@@ -24,6 +24,7 @@ type Call = {
   url: string;
   headers: Headers;
   now: number;
+  signal?: AbortSignal | null;
 };
 type Handler = (call: Call) => Response | Promise<Response>;
 const json = (data: unknown, status = 200) =>
@@ -42,7 +43,7 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-function cli(handler: Handler) {
+function cli(handler: Handler, extraEnv: Record<string, string> = {}) {
   const state = { now: START };
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -54,6 +55,7 @@ function cli(handler: Handler) {
         url: String(input),
         headers: new Headers(init?.headers),
         now: state.now,
+        signal: init?.signal,
       };
       calls.push(call);
       return handler(call);
@@ -61,7 +63,7 @@ function cli(handler: Handler) {
   );
   const context = (argv: string[]): CliContext => ({
     argv,
-    env: { XDG_CONFIG_HOME: home, HOME: home, CLAUDECODE: "1" },
+    env: { XDG_CONFIG_HOME: home, HOME: home, CLAUDECODE: "1", ...extraEnv },
     cwd: home,
     stdout: { write: (text) => void stdout.push(text) },
     stderr: { write: (text) => void stderr.push(text) },
@@ -312,6 +314,40 @@ describe("本番へのログイン（V-23）", () => {
 });
 
 describe("外部レビューの指摘（切り替え）", () => {
+  it("導入の流れが未保存（0.6.0 より前の設定）なら、switch も自動の切り替えも進めず init のやり直しを案内する", async () => {
+    await store().saveConfig({
+      version: 1,
+      default_profile: "sandbox",
+      profiles: { production: { expected_creator_id: "cre_1" }, sandbox: {} },
+    });
+    await saveCredential("production");
+    const t = cli(() => json(account("production")));
+    expect((await t.run("switch", "--json")).code).toBe(2);
+    expect(t.parsed().error.hint).toContain("init");
+    expect(await defaultProfile()).toBe("sandbox");
+    await store().removeCredential("production");
+    const login = cli(({ url }) =>
+      url.endsWith("/cli/device-codes")
+        ? json({
+            device_code: "dev_secret_code_value",
+            user_code: "BCDF-GHJK",
+            verification_uri: `${PROD_APP}/device`,
+            expires_in: 600,
+            interval: 5,
+          })
+        : json({
+            api_key: productionKey,
+            key_id: "key_2",
+            creator_id: "cre_1",
+            environment: "production",
+            expires_at: "2026-11-05T00:00:00.000Z",
+          }),
+    );
+    await login.run("login", "--profile", "production", "--json");
+    await login.run("login", "--complete", "--profile", "production", "--json");
+    expect(login.parsed().data.next_step).toContain("init");
+    expect(await defaultProfile()).toBe("sandbox");
+  });
   it("switch は本番の GET /account で確かめ、保存したキーのローカルの値だけを信じない", async () => {
     await sandboxFirst("cre_1");
     await saveCredential("production", "cre_1");
@@ -1013,6 +1049,98 @@ describe("test-purchase", () => {
       expect(code).toBe(6);
       expect(t.calls.filter((call) => call.url === start).length).toBe(2);
       expect(t.state.now - START).toBeLessThanOrEqual(95_000);
+    });
+  });
+
+  describe("再レビューの指摘", () => {
+    it.each([
+      ["+ に正規化して戻す", "/members?q=a+b"],
+      ["元の表記のまま戻す", "/members?q=a%20b"],
+    ])(
+      "クエリ付きの限定ページでも、サイトが%sなら入れたと判定して返金する",
+      async (_, back) => {
+        const t = cli(
+          api({
+            accessUrl: "https://site.example/members?q=a%20b",
+            site: ({ url, headers }) => {
+              if (url.includes("cozeni_code")) {
+                const r = new Response(null, {
+                  status: 303,
+                  headers: { Location: `${SITE}${back}` },
+                });
+                r.headers.append(
+                  "Set-Cookie",
+                  `cozeni_customer=${CUSTOMER_COOKIE}; Path=/`,
+                );
+                return r;
+              }
+              return headers.has("Cookie")
+                ? new Response("ok", { status: 200 })
+                : new Response(null, {
+                    status: 307,
+                    headers: { Location: enterUrl },
+                  });
+            },
+          }),
+        );
+        expect((await t.run(...args)).code).toBe(0);
+        expect(t.calls.some((call) => call.url === refund)).toBe(true);
+        const again = t.calls.filter(
+          (call) =>
+            call.url.startsWith(SITE) && !call.url.includes("cozeni_code"),
+        )[0];
+        expect(new URL(again?.url ?? "").searchParams.get("q")).toBe("a b");
+      },
+    );
+    it("期限で打ち切ったタイムアウトは 6、即時の通信失敗は 5", async () => {
+      // 即時の通信失敗（残りは30秒以下）。
+      let a!: ReturnType<typeof cli>;
+      let calls = 0;
+      a = cli(
+        api({
+          start: () => {
+            if (++calls === 1) {
+              a.state.now += 60_000;
+              return json({ status: "pending" }, 202);
+            }
+            throw new Error("ECONNREFUSED");
+          },
+        }),
+      );
+      expect((await a.run(...args)).code).toBe(5);
+      // 期限に達したタイムアウト（残り1秒で打ち切られる）。
+      let b!: ReturnType<typeof cli>;
+      let n = 0;
+      b = cli((call) => {
+        if (call.url === start && ++n === 1) {
+          b.state.now += 84_000;
+          return json({ status: "pending" }, 202);
+        }
+        if (call.url === start)
+          return new Promise<Response>((_, reject) =>
+            call.signal?.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            ),
+          ) as unknown as Response;
+        return api({})(call);
+      });
+      expect((await b.run(...args)).code).toBe(6);
+    });
+    it("本番を指す別名のプロファイルは、通信する前（verifyCreator より先）に止める", async () => {
+      await store().saveConfig({
+        version: 1,
+        default_profile: "alias",
+        profiles: {
+          alias: {
+            api_origin: PROD_API,
+            app_origin: PROD_APP,
+            expected_creator_id: "cre_1",
+          },
+        },
+      });
+      const t = cli(api({}), { COZENI_API_KEY: productionKey });
+      expect((await t.run(...args)).code).toBe(2);
+      expect(t.fetch).not.toHaveBeenCalled();
     });
   });
 

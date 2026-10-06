@@ -1,7 +1,13 @@
 // `cozeni test-purchase`：サンドボックス専用。サーバーがテストカードで決済を確定させ、
 // CLI が受け取ったワンタイムコードで開発サーバーの限定ページに入れることを確かめ、返金する（V-22・V-26）。
 // ワンタイムコードと購入者の Cookie は、どの出力・エラーにも含めない。
-import { failure, isLoopback, record, type Send } from "../transport.js";
+import {
+  CozeniError,
+  failure,
+  isLoopback,
+  record,
+  type Send,
+} from "../transport.js";
 import {
   convert,
   PRODUCTION_API_ORIGIN,
@@ -217,7 +223,6 @@ function pageUrl(site: URL, page: PagePath): URL {
   url.search = page.search;
   return url;
 }
-const pathOf = (url: URL) => `${url.pathname}${url.search}`;
 
 async function getPage(
   fetch: Fetch,
@@ -311,7 +316,9 @@ async function checkEntry(
   // 印は無限リダイレクトの停止用で、確認には要らない。付けたままだと、権利が無くても
   // requireEntitlement がリダイレクトせず200の拒否表示を返し、入れたかどうかを区別できない。
   jar.delete("cozeni_handoff");
-  const expected = pageUrl(site, page);
+  // 実際に送ったURLの複製から cozeni_code だけを消したものが、戻り先の期待値（再要求にも使う）。
+  const expected = new URL(first);
+  expected.searchParams.delete("cozeni_code");
   const target = resolveLocation(response, first);
   // Cookie はホスト単位で付く。別のホスト（127.0.0.1 と localhost など）へ移ったら、Cookie を送らずに止める。
   if (target && isLoopback(target) && target.hostname !== site.hostname)
@@ -324,7 +331,9 @@ async function checkEntry(
     response.status !== 303 ||
     !target ||
     target.origin !== site.origin ||
-    pathOf(target) !== pathOf(expected)
+    // 表記（%20 と +）の違いで食い違わないよう、クエリは解釈した値で比べる。
+    target.pathname !== expected.pathname ||
+    target.searchParams.toString() !== expected.searchParams.toString()
   )
     return {
       entered: false,
@@ -425,13 +434,8 @@ const nextStep = (site: URL, flow: Flow | undefined) => {
   ].join("\n");
 };
 
-export async function testPurchase(
-  current: Session,
-  context: TestPurchaseContext,
-  target: { productId: string; site: URL; flow?: Flow },
-): Promise<Output> {
-  const { productId, site } = target;
-  // プロファイル名ではなく、実際に送る先の API が本番なら送らない（別名のプロファイルを含む）。
+/** プロファイル名ではなく、実際に送る先の API が本番なら送らない（別名のプロファイルを含む）。 */
+export function assertNotProductionApi(current: Session): void {
   if (current.apiOrigin === PRODUCTION_API_ORIGIN)
     throw new CliError(
       "test_purchase_unavailable",
@@ -440,6 +444,14 @@ export async function testPurchase(
         hint: "テスト購入はサンドボックスだけで行います。--profile sandbox を付けてください。",
       },
     );
+}
+
+export async function testPurchase(
+  current: Session,
+  context: TestPurchaseContext,
+  target: { productId: string; site: URL; flow?: Flow },
+): Promise<Output> {
+  const { productId, site } = target;
   const product = await call(current, context, () =>
     current.client.products.get(productId),
   );
@@ -465,24 +477,20 @@ export async function testPurchase(
   const startRequest = async () => {
     const remaining = deadline - context.now();
     if (remaining < 1000) throw pending();
-    const clipped = remaining < REQUEST_TIMEOUT_MS;
-    try {
-      return await post(
-        current.send(Math.min(REQUEST_TIMEOUT_MS, remaining)),
-        base,
-        current,
-        context,
-      );
-    } catch (error) {
-      // 期限で打ち切った要求は、通信障害ではなく待ちとして返す（終了コード6）。
-      if (
-        clipped &&
-        error instanceof CliError &&
-        error.code === "network_unreachable"
-      )
-        throw pending();
-      throw error;
-    }
+    const clipped = remaining <= REQUEST_TIMEOUT_MS;
+    return await current
+      .send(Math.min(REQUEST_TIMEOUT_MS, remaining))(base, "POST")
+      .catch((error: unknown) => {
+        // 期限で打ち切ったタイムアウトだけ待ちとして返す（終了コード6）。即時の通信失敗は5のまま。
+        if (clipped && error instanceof CozeniError && error.code === "timeout")
+          throw pending();
+        throw convert(error, {
+          apiOrigin: current.apiOrigin,
+          appOrigin: current.appOrigin,
+          session: current,
+          now: context.now(),
+        });
+      });
   };
   const send = current.send(REQUEST_TIMEOUT_MS);
   let code: string | null = null;

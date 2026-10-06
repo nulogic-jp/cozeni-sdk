@@ -36,13 +36,19 @@ import { skillVersionWarning } from "./skill-version.js";
 import { createStore } from "./store.js";
 import {
   ASK_TO_SWITCH_NEXT_STEP,
+  FLOW_UNKNOWN_HINT,
+  flowUnknown,
   SWITCH_ABORTED_NEXT_STEP,
   SWITCHED_NEXT_STEP,
   setDefaultToProduction,
   switchesToProduction,
   switchToProduction,
 } from "./switch.js";
-import { assertTestPurchaseAllowed, testPurchase } from "./test-purchase.js";
+import {
+  assertNotProductionApi,
+  assertTestPurchaseAllowed,
+  testPurchase,
+} from "./test-purchase.js";
 
 export interface CliContext {
   argv: string[];
@@ -357,6 +363,8 @@ export async function run(context: CliContext): Promise<number> {
         context.fetch,
         context.now(),
       );
+      // 本番の拒否は、通信する verifyCreator より先に行う。
+      assertNotProductionApi(current);
       await verifyCreator(current, context.now());
       write(
         context,
@@ -469,6 +477,12 @@ async function switchAfterLogin(
   profile: ReturnType<typeof resolveProfile>,
   result: Awaited<ReturnType<typeof completeLogin>>,
 ): Promise<Output> {
+  if (flowUnknown(profile, config))
+    return loginOutput({
+      ...result,
+      switch_aborted: true,
+      next_step: FLOW_UNKNOWN_HINT,
+    });
   if (!switchesToProduction(profile, config)) return loginOutput(result);
   // 待っているあいだに別の導入が設定を変えていないか、最新の設定で照合し直す。
   if (!(await setDefaultToProduction(store, result.creator_id)))
