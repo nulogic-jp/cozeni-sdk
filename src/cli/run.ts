@@ -36,6 +36,7 @@ import { skillVersionWarning } from "./skill-version.js";
 import { createStore } from "./store.js";
 import {
   ASK_TO_SWITCH_NEXT_STEP,
+  SWITCH_ABORTED_NEXT_STEP,
   SWITCHED_NEXT_STEP,
   setDefaultToProduction,
   switchesToProduction,
@@ -368,7 +369,7 @@ export async function run(context: CliContext): Promise<number> {
             fetch: context.fetch,
             sleep: context.sleep,
           },
-          target,
+          { ...target, flow: config.flow },
         ),
       );
       return 0;
@@ -469,7 +470,13 @@ async function switchAfterLogin(
   result: Awaited<ReturnType<typeof completeLogin>>,
 ): Promise<Output> {
   if (!switchesToProduction(profile, config)) return loginOutput(result);
-  await setDefaultToProduction(store, config);
+  // 待っているあいだに別の導入が設定を変えていないか、最新の設定で照合し直す。
+  if (!(await setDefaultToProduction(store, result.creator_id)))
+    return loginOutput({
+      ...result,
+      switch_aborted: true,
+      next_step: SWITCH_ABORTED_NEXT_STEP,
+    });
   return loginOutput({
     ...result,
     default_profile: "production",

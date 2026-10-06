@@ -2,12 +2,14 @@
 // 本番の管理画面のプロンプトで init すると、既定のプロファイルは sandbox になり、
 // 本番のクリエイターIDだけが production の期待値として保存される（V-20）。
 // 本番にログインして期待するクリエイターと一致したら、既定を production に書き換える。
+// サンドボックスの管理画面から始めた導入（flow が sandbox-only）では、本番へ切り替えない（V-19）。
 import {
   CLI,
+  convert,
+  creatorMismatch,
   type Profile,
   resolveProfile,
   session,
-  verifyCreator,
 } from "./api.js";
 import type { CommandContext, Output } from "./commands.js";
 import { CliError } from "./errors.js";
@@ -21,6 +23,7 @@ export function switchesToProduction(
   return (
     profile.name === "production" &&
     config.default_profile === "sandbox" &&
+    config.flow === "sandbox-first" &&
     profile.expectedCreatorId !== undefined
   );
 }
@@ -40,17 +43,36 @@ export const ASK_TO_SWITCH_NEXT_STEP = [
   `切り替えてよいと返事があったら、\`${CLI} switch --json\` を実行します。`,
 ].join("\n");
 
-/** 既定のプロファイルを production に書き換える。ログインと期待するクリエイターの確認は呼び出し側が済ませる。 */
+/** ログインの待ち中に導入の設定が変わっていたため、切り替えなかったときの案内。 */
+export const SWITCH_ABORTED_NEXT_STEP = [
+  "ログインを待っているあいだに、導入の設定（期待するアカウントや導入の流れ）が変わったため、既定の接続先は切り替えませんでした。",
+  `別の導入が進んでいないか確かめ、本番に切り替えるなら、\`${CLI} login --profile production --json\` からやり直してください。`,
+].join("\n");
+
+/**
+ * 既定のプロファイルを production に書き換える。待ち時間のあいだに設定が変わっていてもよいよう、
+ * 最新の設定を読み直し、導入の流れと期待するクリエイターがログイン結果と一致するときだけ、
+ * default_profile の1項目だけを更新する。切り替えたら true。
+ */
 export async function setDefaultToProduction(
   store: Store,
-  config: Config,
-): Promise<void> {
-  await store.saveConfig({ ...config, default_profile: "production" });
+  creatorId: string,
+): Promise<boolean> {
+  const latest = await store.loadConfig();
+  if (
+    latest.default_profile !== "sandbox" ||
+    latest.flow !== "sandbox-first" ||
+    latest.profiles.production?.expected_creator_id !== creatorId
+  )
+    return false;
+  await store.saveConfig({ ...latest, default_profile: "production" });
+  return true;
 }
 
 /**
- * `cozeni switch`：本番のログインを確かめ、期待するクリエイターと一致したら既定を production にする。
- * 未ログインなら login_required、別のアカウントなら creator_mismatch で止まり、既定は変えない。
+ * `cozeni switch`：本番のキーの有効性とクリエイターを本番の `GET /account` で確かめ、
+ * 期待するクリエイターと一致したら既定を production にする。
+ * 未ログイン・失効・別のアカウントなら、既定は変えない。
  */
 export async function switchToProduction(
   context: CommandContext & {
@@ -73,6 +95,15 @@ export async function switchToProduction(
         hint: "導入のプロンプトにある init を、--creator <クリエイターID> 付きでやり直してください。",
       },
     );
+  const previous = config.default_profile ?? "production";
+  if (previous !== "production" && config.flow !== "sandbox-first")
+    throw new CliError(
+      "invalid_input",
+      "この導入では、本番への切り替えを行いません。",
+      {
+        hint: "サンドボックスの管理画面から始めた導入は、テスト購入までで止まります。本番へは、本番の管理画面の導入プロンプトを使ってください。",
+      },
+    );
   const current = await session(
     profile,
     store,
@@ -80,16 +111,33 @@ export async function switchToProduction(
     context.fetch,
     context.now(),
   );
-  await verifyCreator(current, context.now());
-  const previous = config.default_profile ?? "production";
+  // 保存したキーのローカルの値ではなく、本番のサーバーでキーの有効性とクリエイターを確かめる。
+  let actual: string;
+  try {
+    actual = (await current.client.account.get()).creator_id;
+  } catch (error) {
+    throw convert(error, {
+      apiOrigin: current.apiOrigin,
+      appOrigin: current.appOrigin,
+      session: current,
+      now: context.now(),
+    });
+  }
+  if (actual !== profile.expectedCreatorId)
+    throw creatorMismatch(profile, actual, current.source);
   const changed = previous !== "production";
-  if (changed) await setDefaultToProduction(store, config);
+  if (changed && !(await setDefaultToProduction(store, actual)))
+    throw new CliError(
+      "invalid_state",
+      "導入の設定が途中で変わったため、切り替えませんでした。",
+      { hint: SWITCH_ABORTED_NEXT_STEP },
+    );
   return {
     data: {
       switched: changed,
       default_profile: "production",
       previous_profile: previous,
-      creator_id: profile.expectedCreatorId,
+      creator_id: actual,
       environment: "production",
       next_step: SWITCHED_NEXT_STEP,
     },

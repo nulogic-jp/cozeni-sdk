@@ -2,18 +2,23 @@
 // CLI が受け取ったワンタイムコードで開発サーバーの限定ページに入れることを確かめ、返金する（V-22・V-26）。
 // ワンタイムコードと購入者の Cookie は、どの出力・エラーにも含めない。
 import { failure, isLoopback, record, type Send } from "../transport.js";
-import { convert, type Profile, type Session } from "./api.js";
+import {
+  convert,
+  PRODUCTION_API_ORIGIN,
+  type Profile,
+  type Session,
+} from "./api.js";
 import { type CommandContext, call, type Output } from "./commands.js";
 import { CliError } from "./errors.js";
 import { CLI } from "./invocation.js";
 import { COMPLETE_WAIT_MS, DEFAULT_POLL_INTERVAL_MS } from "./login.js";
+import type { Flow } from "./store.js";
 
 const PRODUCT_ID = /^prd_[A-Za-z0-9_-]{1,120}$/;
 /** 決済の確定は Stripe を呼ぶため、通常の管理 API より長く待つ。 */
 const REQUEST_TIMEOUT_MS = 30_000;
 /** 開発サーバーへの1要求の待ち時間。 */
 const SITE_TIMEOUT_MS = 15_000;
-const MAX_REDIRECTS = 4;
 const TEST_CARD = "4242 4242 4242 4242";
 
 export interface TestPurchaseFlags {
@@ -201,12 +206,32 @@ class CookieJar {
 
 type Fetch = typeof globalThis.fetch;
 
+/** 限定ページのパス。`//host/path` のような値でも、--site-origin のオリジンから出ない。 */
+interface PagePath {
+  pathname: string;
+  search: string;
+}
+function pageUrl(site: URL, page: PagePath): URL {
+  const url = new URL(site.origin);
+  url.pathname = page.pathname;
+  url.search = page.search;
+  return url;
+}
+const pathOf = (url: URL) => `${url.pathname}${url.search}`;
+
 async function getPage(
   fetch: Fetch,
   site: URL,
   url: URL,
   jar: CookieJar,
 ): Promise<Response> {
+  // 送信の直前に、宛先が --site-origin と同じオリジンかを確かめる（コードと Cookie を外へ出さない）。
+  if (url.origin !== site.origin)
+    throw new CliError(
+      "site_origin_not_allowed",
+      "送信先が --site-origin と一致しないため、送りませんでした。",
+      { hint: "商品の限定ページのURLと、--site-origin を確かめてください。" },
+    );
   const headers = new Headers();
   const cookie = jar.header();
   if (cookie) headers.set("Cookie", cookie);
@@ -236,21 +261,11 @@ async function getPage(
 const isRedirect = (response: Response) =>
   response.status >= 300 && response.status < 400;
 
-/** Location を、手元の開発サーバー（ループバックで同じポート）に限って解決する。 */
-function localTarget(
-  response: Response,
-  from: URL,
-  site: URL,
-): URL | undefined {
+function resolveLocation(response: Response, from: URL): URL | undefined {
   const location = response.headers.get("Location");
   if (!location) return undefined;
   try {
-    const target = new URL(location, from);
-    return isLoopback(target) &&
-      target.protocol === site.protocol &&
-      target.port === site.port
-      ? target
-      : undefined;
+    return new URL(location, from);
   } catch {
     return undefined;
   }
@@ -262,15 +277,19 @@ interface EntryResult {
   hint?: string;
 }
 
-/** ハンドオフ（11 §8.3）を辿って、限定ページに入れることを確かめる。 */
+/**
+ * ハンドオフ（11 §8.3）を辿って、限定ページに入れることを確かめる。
+ * コードを除いた同じURLへ 303 で戻り、購入者の Cookie が付き、その Cookie で限定ページが 200 で返ることを求める。
+ * ログイン画面や公開ページへの転送は成功にしない。
+ */
 async function checkEntry(
   fetch: Fetch,
   site: URL,
-  pagePath: string,
+  page: PagePath,
   code: string,
 ): Promise<EntryResult> {
   const jar = new CookieJar();
-  const first = new URL(pagePath, site);
+  const first = pageUrl(site, page);
   first.searchParams.set("cozeni_code", code);
   const response = await getPage(fetch, site, first, jar);
   if (!isRedirect(response))
@@ -292,33 +311,45 @@ async function checkEntry(
   // 印は無限リダイレクトの停止用で、確認には要らない。付けたままだと、権利が無くても
   // requireEntitlement がリダイレクトせず200の拒否表示を返し、入れたかどうかを区別できない。
   jar.delete("cozeni_handoff");
-  let target = localTarget(response, first, site);
-  if (!target || target.searchParams.has("cozeni_code"))
+  const expected = pageUrl(site, page);
+  const target = resolveLocation(response, first);
+  // Cookie はホスト単位で付く。別のホスト（127.0.0.1 と localhost など）へ移ったら、Cookie を送らずに止める。
+  if (target && isLoopback(target) && target.hostname !== site.hostname)
+    return {
+      entered: false,
+      reason: "host_mismatch",
+      hint: `サイトが別のホスト（${target.hostname}）へ戻しました。購入者の Cookie はホスト単位のため、確認できません。COZENI_SITE_ORIGIN と --site-origin のホストを揃えてください（Next.js 15 では localhost に揃えます）。`,
+    };
+  if (
+    response.status !== 303 ||
+    !target ||
+    target.origin !== site.origin ||
+    pathOf(target) !== pathOf(expected)
+  )
     return {
       entered: false,
       reason: "unexpected_redirect",
-      hint: "コードを除いた同じURLへ 303 で戻る想定でしたが、そうなりませんでした。COZENI_SITE_ORIGIN が開発サーバーのアドレス（localhost）と一致しているか確かめてください。",
+      hint: "コードを除いた同じURLへ 303 で戻る想定でしたが、そうなりませんでした。ログイン画面など別のページへ送られていないか、COZENI_SITE_ORIGIN が開発サーバーのアドレスと一致しているかを確かめてください。",
     };
-  let current = target;
-  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
-    const page = await getPage(fetch, site, current, jar);
-    if (page.status === 200) return { entered: true };
-    if (!isRedirect(page))
-      return {
-        entered: false,
-        reason: `status_${page.status}`,
-        hint: "コードを交換したあとも限定ページが表示されませんでした。購入権の反映を待って打ち直すか、限定ページの実装を確かめてください。",
-      };
-    target = localTarget(page, current, site);
-    if (!target)
-      return {
-        entered: false,
-        reason: "redirected_away",
-        hint: "コードを交換したあとも、限定ページから別の場所へ送られました（入場の画面など）。購入権の反映を待って打ち直すか、限定ページの実装を確かめてください。",
-      };
-    current = target;
-  }
-  return { entered: false, reason: "too_many_redirects" };
+  if (!jar.get("cozeni_customer"))
+    return {
+      entered: false,
+      reason: "no_customer_cookie",
+      hint: "コードを交換しても、購入者の Cookie（cozeni_customer）が付きませんでした。proxy の実装と matcher を確かめてください。",
+    };
+  const shown = await getPage(fetch, site, expected, jar);
+  if (shown.status === 200) return { entered: true };
+  if (isRedirect(shown))
+    return {
+      entered: false,
+      reason: "redirected_away",
+      hint: "コードを交換したあとも、限定ページから別の場所へ送られました（入場の画面など）。購入権の反映を待って打ち直すか、限定ページの実装を確かめてください。",
+    };
+  return {
+    entered: false,
+    reason: `status_${shown.status}`,
+    hint: "コードを交換したあとも限定ページが表示されませんでした。購入権の反映を待って打ち直すか、限定ページの実装を確かめてください。",
+  };
 }
 
 interface UnpurchasedResult {
@@ -331,11 +362,11 @@ interface UnpurchasedResult {
 async function checkUnpurchased(
   fetch: Fetch,
   site: URL,
-  pagePath: string,
+  page: PagePath,
   productId: string,
   appOrigin: string | undefined,
 ): Promise<UnpurchasedResult> {
-  const url = new URL(pagePath, site);
+  const url = pageUrl(site, page);
   url.searchParams.delete("cozeni_code");
   const response = await getPage(fetch, site, url, new CookieJar());
   const location = isRedirect(response)
@@ -371,53 +402,94 @@ async function checkUnpurchased(
   return { redirected: true };
 }
 
-const nextStep = (site: URL) =>
-  [
-    "利用者に1通で次を伝えます。承認の依頼まで同じ1通にまとめてください。",
-    `先に \`${CLI} login --profile production --json\` を実行し、承認URLとコードを受け取ります（本番にログイン済みで期待するアカウントと一致していれば承認URLは出ず、切り替えてよいかを聞く案内が返ります。その場合はURLの代わりにそれを尋ねます）。`,
+const nextStep = (site: URL, flow: Flow | undefined) => {
+  const tried = [
     "1. テスト購入が通ったこと。購入していない状態では限定ページに入れず Cozeni の入場画面へ送られ、テスト購入では限定ページに入れました。確認のあと返金したので、ご自身でも試せます。",
     `2. 「ご自身でも購入から入場まで試せます」。開発サーバー（${site.origin}）の購入ボタンから購入します。テストカードは ${TEST_CARD}（有効期限は未来の日付、CVC は任意の3桁）。メールアドレスはログイン用のメールアドレスで購入し、メールに届くコードを入力すると限定ページに入れます。開発サーバーはこの案内のあいだ動かしたままにします。`,
+  ];
+  // サンドボックスの管理画面から始めた導入は、ここで止める（V-19）。本番への切り替えは案内しない。
+  if (flow !== "sandbox-first")
+    return [
+      "利用者に1通で次を伝えます。",
+      ...tried,
+      "テスト購入までで導入は終わりです。本番へは進まず、本番の承認も頼みません。本番で販売するときは、本番の管理画面の導入プロンプトを使うよう案内します。",
+      "決済画面は操作しません。以後の呼び方は「テスト」です。",
+    ].join("\n");
+  return [
+    "利用者に1通で次を伝えます。承認の依頼まで同じ1通にまとめてください。",
+    `先に \`${CLI} login --profile production --json\` を実行し、承認URLとコードを受け取ります（本番にログイン済みで期待するアカウントと一致していれば承認URLは出ず、切り替えてよいかを聞く案内が返ります。その場合はURLの代わりにそれを尋ねます）。`,
+    ...tried,
     "3. 本番の承認URLを渡し、「試し終わったら（試さないならそのまま）許可を押してください」と伝えます。許可が本番への切り替えの合図です。",
     `許可の返事を待ち、\`${CLI} login --complete --profile production --json\` を実行します。成功すると既定の接続先が本番に切り替わり、次の手順が返ります。`,
     "決済画面は操作しません。以後の呼び方は「テスト」です。",
   ].join("\n");
+};
 
 export async function testPurchase(
   current: Session,
   context: TestPurchaseContext,
-  target: { productId: string; site: URL },
+  target: { productId: string; site: URL; flow?: Flow },
 ): Promise<Output> {
   const { productId, site } = target;
+  // プロファイル名ではなく、実際に送る先の API が本番なら送らない（別名のプロファイルを含む）。
+  if (current.apiOrigin === PRODUCTION_API_ORIGIN)
+    throw new CliError(
+      "test_purchase_unavailable",
+      "接続先が本番の API のため、テスト購入を行いません。",
+      {
+        hint: "テスト購入はサンドボックスだけで行います。--profile sandbox を付けてください。",
+      },
+    );
   const product = await call(current, context, () =>
     current.client.products.get(productId),
   );
-  let pagePath: string;
+  let page: PagePath;
   try {
     const access = new URL(product.access_url);
-    pagePath = `${access.pathname}${access.search}`;
+    page = { pathname: access.pathname, search: access.search };
   } catch {
     throw new CliError(
       "invalid_response",
       "商品の限定ページのURLが想定外です。",
     );
   }
-  const send = current.send(REQUEST_TIMEOUT_MS);
   const base = `/products/${encodeURIComponent(productId)}/test-purchase`;
 
   // 開始。202 のあいだ、login --complete と同じ間隔・最長90秒で打ち直す。
   const deadline = context.now() + COMPLETE_WAIT_MS;
+  const pending = () =>
+    new CliError("authorization_pending", "テスト購入の確定を待っています。", {
+      hint: "購入権ができるまで時間がかかっています。同じコマンドを打ち直してください（処理中の決済があれば、新たに決済しません）。",
+    });
+  // 期限までの残り時間を超えて待たない。要求の前に期限を確かめ、タイムアウトを残り時間に抑える。
+  const startRequest = async () => {
+    const remaining = deadline - context.now();
+    if (remaining < 1000) throw pending();
+    const clipped = remaining < REQUEST_TIMEOUT_MS;
+    try {
+      return await post(
+        current.send(Math.min(REQUEST_TIMEOUT_MS, remaining)),
+        base,
+        current,
+        context,
+      );
+    } catch (error) {
+      // 期限で打ち切った要求は、通信障害ではなく待ちとして返す（終了コード6）。
+      if (
+        clipped &&
+        error instanceof CliError &&
+        error.code === "network_unreachable"
+      )
+        throw pending();
+      throw error;
+    }
+  };
+  const send = current.send(REQUEST_TIMEOUT_MS);
   let code: string | null = null;
   for (;;) {
-    const { response, data } = await post(send, base, current, context);
+    const { response, data } = await startRequest();
     if (response.status === 202 && record(data) && data.status === "pending") {
-      if (context.now() + DEFAULT_POLL_INTERVAL_MS > deadline)
-        throw new CliError(
-          "authorization_pending",
-          "テスト購入の確定を待っています。",
-          {
-            hint: `購入権ができるまで時間がかかっています。同じコマンドを打ち直してください（処理中の決済があれば、新たに決済しません）。`,
-          },
-        );
+      if (context.now() + DEFAULT_POLL_INTERVAL_MS > deadline) throw pending();
       await context.sleep(DEFAULT_POLL_INTERVAL_MS);
       continue;
     }
@@ -448,11 +520,11 @@ export async function testPurchase(
     );
 
   // 入場の確認。コードは手元の開発サーバーにだけ送り、出力しない。
-  const entry = await checkEntry(context.fetch, site, pagePath, code);
+  const entry = await checkEntry(context.fetch, site, page, code);
   const unpurchased = await checkUnpurchased(
     context.fetch,
     site,
-    pagePath,
+    page,
     productId,
     current.appOrigin,
   );
@@ -499,7 +571,7 @@ export async function testPurchase(
   const refundCount =
     typeof refund.data.refund_count === "number" ? refund.data.refund_count : 0;
   const refunded = refund.data.status === "refunded";
-  const steps = nextStep(site);
+  const steps = nextStep(site, target.flow);
   return {
     data: {
       profile: current.profile.name,

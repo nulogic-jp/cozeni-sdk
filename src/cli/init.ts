@@ -437,6 +437,10 @@ export async function init(
   const skills = await copySkills(root, targets);
 
   config.default_profile = name;
+  // 導入の流れは、どの導入プロンプトから来たかを表す。--profile を省略した再実行では変えない。
+  if (sandboxFirst) config.flow = "sandbox-first";
+  else if (options.profile === "sandbox") config.flow = "sandbox-only";
+  else if (options.profile !== undefined) delete config.flow;
   if (sandboxFirst) {
     config.profiles.production = { expected_creator_id: creator };
     config.profiles.sandbox = {};

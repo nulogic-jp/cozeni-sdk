@@ -102,6 +102,7 @@ async function sandboxFirst(creator = "cre_1") {
   await store().saveConfig({
     version: 1,
     default_profile: "sandbox",
+    flow: "sandbox-first",
     profiles: { production: { expected_creator_id: creator }, sandbox: {} },
   });
 }
@@ -310,6 +311,75 @@ describe("本番へのログイン（V-23）", () => {
   });
 });
 
+describe("外部レビューの指摘（切り替え）", () => {
+  it("switch は本番の GET /account で確かめ、保存したキーのローカルの値だけを信じない", async () => {
+    await sandboxFirst("cre_1");
+    await saveCredential("production", "cre_1");
+    const t = cli(() => json(account("production", "cre_other")));
+    expect((await t.run("switch", "--json")).code).toBe(4);
+    expect(t.parsed().error.code).toBe("creator_mismatch");
+    expect(await defaultProfile()).toBe("sandbox");
+  });
+  it("switch は失効したキーなら既定を変えない", async () => {
+    await sandboxFirst("cre_1");
+    await saveCredential("production", "cre_1");
+    const t = cli(() => apiError("unauthorized", 401));
+    expect((await t.run("switch", "--json")).code).toBe(3);
+    expect(await defaultProfile()).toBe("sandbox");
+  });
+  it("サンドボックスだけの導入では、過去の本番の期待値があっても自動で切り替えず、switch も断る", async () => {
+    await store().saveConfig({
+      version: 1,
+      default_profile: "sandbox",
+      flow: "sandbox-only",
+      profiles: {
+        production: { expected_creator_id: "cre_1" },
+        sandbox: { expected_creator_id: "cre_1" },
+      },
+    });
+    await saveCredential("production");
+    const login = cli(() => json(account("production")));
+    await login.run("login", "--profile", "production", "--json");
+    expect(login.parsed().data.next_step).not.toContain("切り替えてよいですか");
+    const t = cli(() => json(account("production")));
+    expect((await t.run("switch", "--json")).code).toBe(2);
+    expect(await defaultProfile()).toBe("sandbox");
+  });
+  it("ログインを待つあいだに別の導入が設定を変えたら、切り替えず、その設定を巻き戻さない", async () => {
+    await sandboxFirst("cre_1");
+    const t = cli(async ({ url }) => {
+      if (url.endsWith("/cli/device-codes"))
+        return json({
+          device_code: "dev_secret_code_value",
+          user_code: "BCDF-GHJK",
+          verification_uri: `${PROD_APP}/device`,
+          verification_uri_complete: `${PROD_APP}/device?code=BCDF-GHJK`,
+          expires_in: 600,
+          interval: 5,
+        });
+      // 待っているあいだに、別の導入が init --creator cre_B を保存する。
+      await sandboxFirst("cre_B");
+      return json({
+        api_key: productionKey,
+        key_id: "key_2",
+        creator_id: "cre_1",
+        environment: "production",
+        expires_at: "2026-11-05T00:00:00.000Z",
+      });
+    });
+    await t.run("login", "--profile", "production", "--json");
+    expect(
+      (await t.run("login", "--complete", "--profile", "production", "--json"))
+        .code,
+    ).toBe(0);
+    expect(t.parsed().data).toMatchObject({ switch_aborted: true });
+    expect(t.parsed().data.switched_to_production).toBeUndefined();
+    const latest = await store().loadConfig();
+    expect(latest.default_profile).toBe("sandbox");
+    expect(latest.profiles.production?.expected_creator_id).toBe("cre_B");
+  });
+});
+
 describe("status（サンドボックスの Stripe 連携）", () => {
   const blocked = {
     can_sell: false,
@@ -425,7 +495,8 @@ describe("test-purchase", () => {
   }
 
   function api(overrides: {
-    start?: () => Response;
+    accessUrl?: string;
+    start?: (call: Call) => Response;
     refund?: () => Response;
     site?: Handler;
   }): Handler {
@@ -435,10 +506,13 @@ describe("test-purchase", () => {
       )
         return (overrides.site ?? site())(call);
       if (call.url === `${SBX_API}/external/v1/products/${PRODUCT_ID}`)
-        return json(product);
+        return json({
+          ...product,
+          ...(overrides.accessUrl ? { access_url: overrides.accessUrl } : {}),
+        });
       if (call.url === start)
         return (
-          overrides.start?.() ??
+          overrides.start?.(call) ??
           json({
             status: "completed",
             handoff_code: HANDOFF_CODE,
@@ -786,6 +860,162 @@ describe("test-purchase", () => {
     expect((await t.run(...args)).code).toBe(0);
     expect(t.parsed().data).toMatchObject({ refunded: false, refund_count: 0 });
   });
+
+  describe("外部レビューの指摘", () => {
+    it("access_url のパスが // で始まっても、--site-origin の外へ送らない", async () => {
+      const t = cli(
+        api({ accessUrl: "https://site.example//evil.example/steal" }),
+      );
+      await t.run(...args);
+      expect(
+        t.calls.some((call) => new URL(call.url).hostname === "evil.example"),
+      ).toBe(false);
+      const first = t.calls.find((call) => call.url.includes("cozeni_code"));
+      expect(new URL(first?.url ?? "").origin).toBe(SITE);
+    });
+    it("コード付きの要求が /login へ 302・303 で転送されても、入れたことにしない", async () => {
+      for (const status of [302, 303]) {
+        const t = cli(
+          api({
+            site: ({ url }) => {
+              if (url.includes("cozeni_code")) {
+                const r = new Response(null, {
+                  status,
+                  headers: { Location: `${SITE}/login` },
+                });
+                r.headers.append(
+                  "Set-Cookie",
+                  `cozeni_customer=${CUSTOMER_COOKIE}; Path=/`,
+                );
+                return r;
+              }
+              return url.endsWith("/login")
+                ? new Response("login", { status: 200 })
+                : new Response(null, {
+                    status: 307,
+                    headers: { Location: enterUrl },
+                  });
+            },
+          }),
+        );
+        const { code } = await t.run(...args);
+        expect(code).toBe(4);
+        expect(t.parsed().error).toMatchObject({
+          code: "entry_check_failed",
+          reason: "unexpected_redirect",
+        });
+        expect(t.calls.some((call) => call.url === refund)).toBe(false);
+      }
+    });
+    it("購入者の Cookie が付かなければ、入れたことにしない", async () => {
+      const t = cli(
+        api({
+          site: ({ url }) =>
+            url.includes("cozeni_code")
+              ? new Response(null, {
+                  status: 303,
+                  headers: { Location: `${SITE}/members/handbook` },
+                })
+              : new Response("公開ページ", { status: 200 }),
+        }),
+      );
+      expect((await t.run(...args)).code).toBe(4);
+      expect(t.parsed().error.reason).toBe("no_customer_cookie");
+    });
+    it("別のホストへ戻されたら Cookie を送らず、ホストを揃えるよう案内する", async () => {
+      const t = cli(
+        api({
+          site: ({ url }) => {
+            if (!url.includes("cozeni_code"))
+              return new Response("x", { status: 200 });
+            const r = new Response(null, {
+              status: 303,
+              headers: { Location: "http://localhost:3000/members/handbook" },
+            });
+            r.headers.append(
+              "Set-Cookie",
+              `cozeni_customer=${CUSTOMER_COOKIE}; Path=/`,
+            );
+            return r;
+          },
+        }),
+      );
+      const { code } = await t.run(
+        "test-purchase",
+        "--product",
+        PRODUCT_ID,
+        "--site-origin",
+        "http://127.0.0.1:3000",
+        "--json",
+      );
+      expect(code).toBe(4);
+      expect(t.parsed().error.reason).toBe("host_mismatch");
+      expect(t.parsed().error.hint).toContain("localhost");
+      expect(
+        t.calls.some((call) => new URL(call.url).hostname === "localhost"),
+      ).toBe(false);
+      expect(
+        t.calls.some((call) =>
+          call.headers.get("Cookie")?.includes(CUSTOMER_COOKIE),
+        ),
+      ).toBe(false);
+    });
+    it("サンドボックスだけの導入（過去の本番の期待値が残っている）では、本番への案内を出さない", async () => {
+      await store().saveConfig({
+        version: 1,
+        default_profile: "sandbox",
+        flow: "sandbox-only",
+        profiles: {
+          production: { expected_creator_id: "cre_1" },
+          sandbox: { expected_creator_id: "cre_1" },
+        },
+      });
+      const t = cli(api({}));
+      expect((await t.run(...args)).code).toBe(0);
+      const step = t.parsed().data.next_step as string;
+      expect(step).not.toContain("login --profile production");
+      expect(step).not.toContain("login --complete --profile production");
+      expect(step).toContain("ご自身でも購入から入場まで試せます");
+      expect(step).toContain("本番の管理画面の導入プロンプト");
+    });
+    it("接続先が本番の API なら、別名のプロファイルからも送らない", async () => {
+      await store().saveConfig({
+        version: 1,
+        default_profile: "alias",
+        profiles: { alias: { api_origin: PROD_API, app_origin: PROD_APP } },
+      });
+      await store().saveCredential("alias", {
+        api_origin: PROD_API,
+        app_origin: PROD_APP,
+        api_key: productionKey,
+        key_id: "k",
+        creator_id: "cre_1",
+        environment: "production",
+        expires_at: "2026-11-05T00:00:00.000Z",
+      });
+      const t = cli(api({}));
+      const { code } = await t.run(...args);
+      expect(code).toBe(2);
+      expect(t.parsed().error.code).toBe("test_purchase_unavailable");
+      expect(t.fetch).not.toHaveBeenCalled();
+    });
+    it("最長90秒を超えて要求を送らず、期限での打ち切りは終了コード6", async () => {
+      let t!: ReturnType<typeof cli>;
+      t = cli(
+        api({
+          start: () => {
+            t.state.now += 40_000; // 1回の要求が長引く
+            return json({ status: "pending" }, 202);
+          },
+        }),
+      );
+      const { code } = await t.run(...args);
+      expect(code).toBe(6);
+      expect(t.calls.filter((call) => call.url === start).length).toBe(2);
+      expect(t.state.now - START).toBeLessThanOrEqual(95_000);
+    });
+  });
+
   it("人向けの表示にもコードとCookieを出さない", async () => {
     const t = cli(api({}));
     const { code, out, err } = await t.run(

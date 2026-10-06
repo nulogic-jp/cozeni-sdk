@@ -241,6 +241,8 @@ export interface LoginResult {
   /** 本番のログインで既定のプロファイルを本番に切り替えたとき（V-23）だけ付く。 */
   default_profile?: string;
   switched_to_production?: boolean;
+  /** ログインを待つあいだに導入の設定が変わり、切り替えなかったとき。 */
+  switch_aborted?: boolean;
 }
 
 /**

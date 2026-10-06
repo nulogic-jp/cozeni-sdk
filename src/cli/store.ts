@@ -30,9 +30,12 @@ export interface ProfileConfig {
   api_origin?: string;
   app_origin?: string;
 }
+/** 導入の流れ。sandbox-first は本番の管理画面から（サンドボックスで試して本番へ切り替える）、sandbox-only はサンドボックスの管理画面から（本番へは進まない）。 */
+export type Flow = "sandbox-first" | "sandbox-only";
 export interface Config {
   version: 1;
   default_profile?: string;
+  flow?: Flow;
   profiles: Record<string, ProfileConfig>;
 }
 
@@ -255,6 +258,9 @@ export function createStore(env: Record<string, string | undefined>) {
         typeof file.profiles !== "object" ||
         file.profiles === null ||
         Array.isArray(file.profiles) ||
+        (file.flow !== undefined &&
+          file.flow !== "sandbox-first" &&
+          file.flow !== "sandbox-only") ||
         (file.default_profile !== undefined &&
           (typeof file.default_profile !== "string" ||
             !PROFILE_NAME.test(file.default_profile)))

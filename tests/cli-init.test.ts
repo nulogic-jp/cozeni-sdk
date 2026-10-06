@@ -173,6 +173,7 @@ describe("init", () => {
     expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
       version: 1,
       default_profile: "sandbox",
+      flow: "sandbox-first",
       profiles: {
         production: { expected_creator_id: "cre_abc" },
         sandbox: {},
@@ -220,6 +221,7 @@ describe("init", () => {
     expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
       version: 1,
       default_profile: "sandbox",
+      flow: "sandbox-only",
       profiles: {
         production: { expected_creator_id: "cre_prod" },
         sandbox: { expected_creator_id: "cre_sbx" },
@@ -482,6 +484,7 @@ describe("init", () => {
     expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
       version: 1,
       default_profile: "sandbox",
+      flow: "sandbox-only",
       profiles: { sandbox: { expected_creator_id: "cre_abc" } },
     });
   });
