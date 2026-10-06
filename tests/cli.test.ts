@@ -470,7 +470,7 @@ describe("接続先の固定", () => {
 
 describe("sandboxプロファイル", () => {
   const SANDBOX_API = "https://api-sandbox.cozeni.net";
-  const SANDBOX_APP = "https://app-sandbox.cozeni.net";
+  const SANDBOX_APP = "https://sandbox.cozeni.net";
   const sandboxKey = `cozeni_sk_sandbox_${"a".repeat(64)}`;
   const productionKey = `cozeni_sk_${"b".repeat(64)}`;
   const sandboxDeviceCode = {

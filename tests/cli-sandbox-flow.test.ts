@@ -9,7 +9,7 @@ import { createStore } from "../src/cli/store.js";
 const PROD_API = "https://api.cozeni.net";
 const PROD_APP = "https://cozeni.net";
 const SBX_API = "https://api-sandbox.cozeni.net";
-const SBX_APP = "https://app-sandbox.cozeni.net";
+const SBX_APP = "https://sandbox.cozeni.net";
 // 購入者面（checkout / enter）。本体は enter_url を CHECKOUT_BASE_URL から組み立てる（N-2）。
 const SBX_CHECKOUT = "https://checkout-sandbox.cozeni.net";
 const SITE = "http://localhost:3000";
