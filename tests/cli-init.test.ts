@@ -114,9 +114,16 @@ const files = async (directory: string): Promise<string[]> =>
     .sort();
 
 describe("init", () => {
-  it("SDKを厳密な版で入れ、skillを置き、既定の設定を0600で保存する", async () => {
+  it("SDKを厳密な版で入れ、skillを置き、既定の設定を0600で保存する（--profile production）", async () => {
     const t = cli();
-    const { code, out } = await t.run("init", "--creator", "cre_abc", "--json");
+    const { code, out } = await t.run(
+      "init",
+      "--creator",
+      "cre_abc",
+      "--profile",
+      "production",
+      "--json",
+    );
     expect(code).toBe(0);
     expect(out).not.toContain("api_key");
     expect(t.runCommand).toHaveBeenCalledWith(
@@ -149,6 +156,99 @@ describe("init", () => {
     });
     // credentials.json には触れない。
     expect(await readdir(join(home, "cozeni"))).toEqual(["config.json"]);
+  });
+  it("--profileを省略した本番の管理画面のプロンプトは、本番のIDを期待値にして既定をsandboxにする", async () => {
+    const t = cli();
+    const { code, out } = await t.run("init", "--creator", "cre_abc", "--json");
+    expect(code).toBe(0);
+    expect(out).not.toContain("api_key");
+    expect(t.parsed().data).toMatchObject({
+      profile: "sandbox",
+      api_origin: "https://api-sandbox.cozeni.net",
+      app_origin: "https://app-sandbox.cozeni.net",
+      expected_creator_id: null,
+      production_expected_creator_id: "cre_abc",
+      next_step: "npx cozeni login",
+    });
+    expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
+      version: 1,
+      default_profile: "sandbox",
+      profiles: {
+        production: { expected_creator_id: "cre_abc" },
+        sandbox: {},
+      },
+    });
+    expect(t.fetch).not.toHaveBeenCalled();
+  });
+  it("サンドボックス先行のとき、sandboxに前の期待値が残っていても照合しない", async () => {
+    const t = cli();
+    await t.run(
+      "init",
+      "--creator",
+      "cre_old_sandbox",
+      "--profile",
+      "sandbox",
+      "--json",
+    );
+    await t.run("init", "--creator", "cre_prod", "--json");
+    expect(
+      (await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).profiles,
+    ).toEqual({
+      production: { expected_creator_id: "cre_prod" },
+      sandbox: {},
+    });
+  });
+  it("サンドボックスの管理画面のプロンプトは、サンドボックスのIDで照合し、本番の期待値に触れない", async () => {
+    const t = cli();
+    await t.run("init", "--creator", "cre_prod", "--json");
+    expect(
+      (
+        await t.run(
+          "init",
+          "--creator",
+          "cre_sbx",
+          "--profile",
+          "sandbox",
+          "--json",
+        )
+      ).code,
+    ).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "sandbox",
+      expected_creator_id: "cre_sbx",
+    });
+    expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
+      version: 1,
+      default_profile: "sandbox",
+      profiles: {
+        production: { expected_creator_id: "cre_prod" },
+        sandbox: { expected_creator_id: "cre_sbx" },
+      },
+    });
+  });
+  it("--profile production は、サンドボックスを使わず本番に直接つなぐ（V-24）", async () => {
+    const t = cli();
+    await t.run("init", "--creator", "cre_prod", "--json");
+    expect(
+      (
+        await t.run(
+          "init",
+          "--creator",
+          "cre_prod",
+          "--profile",
+          "production",
+          "--json",
+        )
+      ).code,
+    ).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "production",
+      expected_creator_id: "cre_prod",
+    });
+    expect(
+      (await createStore({ XDG_CONFIG_HOME: home }).loadConfig())
+        .default_profile,
+    ).toBe("production");
   });
   it.each([
     ["bun.lock", "bun", ["add", "--exact"]],
@@ -439,7 +539,23 @@ describe("init", () => {
     expect((await t.run("init", "--json")).code).toBe(2);
     await t.run("init", "--creator", "cre_abc", "--json");
     expect((await t.run("init", "--json")).code).toBe(0);
-    expect(t.parsed().data.expected_creator_id).toBe("cre_abc");
+    expect(t.parsed().data).toMatchObject({
+      profile: "sandbox",
+      production_expected_creator_id: "cre_abc",
+    });
+    await t.run(
+      "init",
+      "--creator",
+      "cre_abc",
+      "--profile",
+      "production",
+      "--json",
+    );
+    expect((await t.run("init", "--json")).code).toBe(0);
+    expect(t.parsed().data).toMatchObject({
+      profile: "production",
+      expected_creator_id: "cre_abc",
+    });
   });
   it("通信しない", async () => {
     const t = cli();
@@ -510,9 +626,18 @@ describe("init", () => {
         PATH: "/usr/bin",
       },
     });
-    expect((await t.run("init", "--creator", "cre_abc", "--json")).code).toBe(
-      0,
-    );
+    expect(
+      (
+        await t.run(
+          "init",
+          "--creator",
+          "cre_abc",
+          "--profile",
+          "production",
+          "--json",
+        )
+      ).code,
+    ).toBe(0);
     const env = t.runCommand.mock.calls[0]?.[3] as Record<string, string>;
     expect(Object.keys(env).filter((key) => key.startsWith("COZENI_"))).toEqual(
       [],

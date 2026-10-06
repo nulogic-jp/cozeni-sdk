@@ -383,9 +383,21 @@ export async function init(
   store: Store,
   options: InitOptions,
 ): Promise<Output> {
-  // 再実行で既定を変えないよう、--profile が無ければ今の既定を引き継ぐ。
   const config = await store.loadConfig();
-  const name = options.profile ?? config.default_profile ?? "production";
+  // --profile を省略した init が本番の管理画面のプロンプト（V-20）。本番のクリエイターIDを
+  // production の期待値として保存し、既定を sandbox にする。サンドボックスではクリエイターを照合しない。
+  // --creator も無い再実行は、サンドボックス先行の状態（既定が sandbox で本番の期待値だけがある）なら同じ扱いにする。
+  const productionCreator = config.profiles.production?.expected_creator_id;
+  const sandboxFirst =
+    options.profile === undefined &&
+    (options.creator !== undefined ||
+      (config.default_profile === "sandbox" &&
+        !config.profiles.sandbox?.expected_creator_id &&
+        productionCreator !== undefined));
+  // 再実行で既定を変えないよう、--profile が無ければ今の既定を引き継ぐ。
+  const name = sandboxFirst
+    ? "sandbox"
+    : (options.profile ?? config.default_profile ?? "production");
   // production・sandbox 以外の接続先は、指定が無ければ保存済みの値を使う。
   const profile = resolveProfile(
     { ...options, profile: name },
@@ -403,7 +415,9 @@ export async function init(
   const saved = Object.hasOwn(config.profiles, name)
     ? config.profiles[name]
     : undefined;
-  const creator = options.creator ?? saved?.expected_creator_id;
+  const creator = sandboxFirst
+    ? (options.creator ?? productionCreator)
+    : (options.creator ?? saved?.expected_creator_id);
   if (!creator || !CREATOR_ID.test(creator))
     throw new CliError(
       "invalid_input",
@@ -423,12 +437,16 @@ export async function init(
   const skills = await copySkills(root, targets);
 
   config.default_profile = name;
-  config.profiles[name] = {
-    expected_creator_id: creator,
-    ...(profile.fixed
-      ? {}
-      : { api_origin: profile.apiOrigin, app_origin: profile.appOrigin }),
-  };
+  if (sandboxFirst) {
+    config.profiles.production = { expected_creator_id: creator };
+    config.profiles.sandbox = {};
+  } else
+    config.profiles[name] = {
+      expected_creator_id: creator,
+      ...(profile.fixed
+        ? {}
+        : { api_origin: profile.apiOrigin, app_origin: profile.appOrigin }),
+    };
   await store.saveConfig(config);
 
   // init したプロファイルが既定になるため、以後の案内に --profile は要らない。
@@ -440,7 +458,9 @@ export async function init(
       : `- 販売に使う部品（${PACKAGE_NAME} ${context.version}）は追加済みです。`,
     `- AI 向けの手順書を置きました: ${skills.map((skill) => skill.path).join("、")}`,
     `- 接続先: ${profileLabel(profile)}（${profile.apiOrigin}）`,
-    `- 使うアカウント: ${creator}`,
+    sandboxFirst
+      ? `- 本番で使うアカウント: ${creator}（テスト用の環境ではアカウントを照合しません。本番に切り替えるときに照合します）`
+      : `- 使うアカウント: ${creator}`,
     `次にやること: ${nextStep} を実行して、Cozeni にログインします。`,
   ];
   return {
@@ -452,7 +472,8 @@ export async function init(
       profile: name,
       api_origin: profile.apiOrigin,
       app_origin: profile.appOrigin,
-      expected_creator_id: creator,
+      expected_creator_id: sandboxFirst ? null : creator,
+      ...(sandboxFirst ? { production_expected_creator_id: creator } : {}),
       config_path: store.configPath,
       next_step: nextStep,
     },

@@ -34,6 +34,14 @@ import {
 } from "./login.js";
 import { skillVersionWarning } from "./skill-version.js";
 import { createStore } from "./store.js";
+import {
+  ASK_TO_SWITCH_NEXT_STEP,
+  SWITCHED_NEXT_STEP,
+  setDefaultToProduction,
+  switchesToProduction,
+  switchToProduction,
+} from "./switch.js";
+import { assertTestPurchaseAllowed, testPurchase } from "./test-purchase.js";
 
 export interface CliContext {
   argv: string[];
@@ -77,6 +85,8 @@ const commands: Record<string, string[]> = {
   ],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
+  "test-purchase": [...common, "product", "site-origin"],
+  switch: ["json", "help"],
 };
 
 const help = `Cozeni CLI ${version}
@@ -102,6 +112,12 @@ const help = `Cozeni CLI ${version}
   products update <商品ID> [--name] [--price] [--access-url]
                             商品を変更（価格・URLの変更は確認が必要）
   link <商品ID>             購入リンクを取得（無ければ発行）
+  test-purchase --product <商品ID> --site-origin <開発サーバーのURL>
+                            サンドボックスでテスト購入し、限定ページに入れる
+                            ことを確かめて返金する（本番では使えない。
+                            --site-origin は localhost・127.0.0.1・[::1] のみ）
+  switch                    本番にログイン済みで期待するアカウントと一致して
+                            いれば、既定の接続先を本番に切り替える
 
 共通オプション:
   --json                    AI向けの機械可読出力（1行のJSON）
@@ -152,6 +168,8 @@ type Flags = {
   name?: string;
   price?: string;
   "access-url"?: string;
+  product?: string;
+  "site-origin"?: string;
   help?: boolean;
   version?: boolean;
 };
@@ -174,6 +192,8 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         name: { type: "string" },
         price: { type: "string" },
         "access-url": { type: "string" },
+        product: { type: "string" },
+        "site-origin": { type: "string" },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean", short: "v" },
       },
@@ -256,11 +276,8 @@ export async function run(context: CliContext): Promise<number> {
     const warning = await skillVersionWarning(context.cwd, version);
     if (warning) context.stderr.write(`${warning}\n`);
 
-    const profile = resolveProfile(
-      flags,
-      context.env,
-      await store.loadConfig(),
-    );
+    const config = await store.loadConfig();
+    const profile = resolveProfile(flags, context.env, config);
     // 保存先に不備があっても、ここでは止めない（必要なコマンドがその場で報告する）。
     await removeExpiredIdempotencyKeys(store, context.now()).catch(() => {});
     const interactive = isInteractive(
@@ -281,7 +298,12 @@ export async function run(context: CliContext): Promise<number> {
         write(
           context,
           json,
-          loginOutput(await completeLogin(loginContext, store, profile)),
+          await switchAfterLogin(
+            store,
+            config,
+            profile,
+            await completeLogin(loginContext, store, profile),
+          ),
         );
         return 0;
       }
@@ -291,10 +313,63 @@ export async function run(context: CliContext): Promise<number> {
         context,
         json,
         current
-          ? loginOutput(current)
+          ? loginOutput(
+              switchesToProduction(profile, config)
+                ? { ...current, next_step: ASK_TO_SWITCH_NEXT_STEP }
+                : current,
+            )
           : interactive
-            ? await interactiveLogin(context, loginContext, store, profile)
+            ? await interactiveLogin(
+                context,
+                loginContext,
+                store,
+                profile,
+                config,
+              )
             : startOutput(await startLogin(loginContext, store, profile)),
+      );
+      return 0;
+    }
+    if (name === "switch") {
+      write(
+        context,
+        json,
+        await switchToProduction(
+          {
+            now: context.now,
+            confirm: async () => {},
+            env: context.env,
+            fetch: context.fetch,
+          },
+          store,
+        ),
+      );
+      return 0;
+    }
+    if (name === "test-purchase") {
+      // 通信の前に、本番・非ループバックの組み合わせを止める。
+      const target = assertTestPurchaseAllowed(profile, flags);
+      const current = await session(
+        profile,
+        store,
+        context.env,
+        context.fetch,
+        context.now(),
+      );
+      await verifyCreator(current, context.now());
+      write(
+        context,
+        json,
+        await testPurchase(
+          current,
+          {
+            now: context.now,
+            confirm: async () => {},
+            fetch: context.fetch,
+            sleep: context.sleep,
+          },
+          target,
+        ),
       );
       return 0;
     }
@@ -383,6 +458,26 @@ function startOutput(result: Awaited<ReturnType<typeof startLogin>>): Output {
   };
 }
 
+/**
+ * 本番のログインが期待するクリエイターで完了したら、それを本番への切り替えの合図にして、
+ * 既定のプロファイルを production に書き換える（V-23）。クリエイターの照合は completeLogin が済ませている。
+ */
+async function switchAfterLogin(
+  store: ReturnType<typeof createStore>,
+  config: Awaited<ReturnType<ReturnType<typeof createStore>["loadConfig"]>>,
+  profile: ReturnType<typeof resolveProfile>,
+  result: Awaited<ReturnType<typeof completeLogin>>,
+): Promise<Output> {
+  if (!switchesToProduction(profile, config)) return loginOutput(result);
+  await setDefaultToProduction(store, config);
+  return loginOutput({
+    ...result,
+    default_profile: "production",
+    switched_to_production: true,
+    next_step: SWITCHED_NEXT_STEP,
+  });
+}
+
 function loginOutput(
   result: Awaited<ReturnType<typeof completeLogin>>,
 ): Output {
@@ -414,6 +509,7 @@ async function interactiveLogin(
   loginContext: LoginContext,
   store: ReturnType<typeof createStore>,
   profile: ReturnType<typeof resolveProfile>,
+  config: Awaited<ReturnType<ReturnType<typeof createStore>["loadConfig"]>>,
 ): Promise<Output> {
   const started = await startLogin(loginContext, store, profile);
   const { instructions } = started;
@@ -435,7 +531,10 @@ async function interactiveLogin(
     context.openBrowser(url);
   });
   try {
-    return loginOutput(
+    return await switchAfterLogin(
+      store,
+      config,
+      profile,
       await completeLogin(loginContext, store, profile, {
         pending: started.pending,
         deadline: Date.parse(started.pending.expires_at),

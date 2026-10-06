@@ -1,7 +1,7 @@
 // プロファイル（= 接続するCozeniの環境）の解決と、キーを発行時のオリジンに結ぶ処理、
 // SDKのエラーを利用者向けの案内へ変換する処理。
 import { createManagementClient } from "../index.js";
-import { CozeniError, origin } from "../transport.js";
+import { CozeniError, origin, type Send, transport } from "../transport.js";
 import { CliError } from "./errors.js";
 import { CLI, INIT_CLI } from "./invocation.js";
 import {
@@ -197,6 +197,8 @@ export interface Session {
   source: "env" | "saved";
   credential?: Credential;
   client: ReturnType<typeof createManagementClient>;
+  /** 管理クライアントに無いAPI（テスト購入など）を、同じキー・接続先で呼ぶ。 */
+  send(timeoutMs?: number): Send;
 }
 
 /** 管理APIを呼ぶためのキーを決める。COZENI_API_KEYは保存済みの認証情報より優先する。 */
@@ -261,6 +263,8 @@ export async function session(
     source: envKey ? "env" : "saved",
     credential,
     client,
+    send: (timeoutMs = TIMEOUT_MS) =>
+      transport({ apiOrigin, fetch, timeoutMs }, apiKey),
   };
 }
 

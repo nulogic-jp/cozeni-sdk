@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.5.1 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.6.0 init --creator <クリエイターID>
 ```
 
 `init` は次を行います（通信するのは package manager だけです）。
@@ -25,7 +25,7 @@ npx @nulogic/cozeni-sdk@0.5.1 init --creator <クリエイターID>
 1. 実行した場所から上へたどって `package.json` のある場所をプロジェクトのルートにする。
 2. `package.json` の `packageManager`（例 `pnpm@9.1.0`）、無ければ lockfile（`bun.lock`・`bun.lockb` → bun、`pnpm-lock.yaml` → pnpm、`yarn.lock` → yarn、`package-lock.json` か無し → npm）で package manager を決め、`@nulogic/cozeni-sdk@<実行した版>` を厳密な版で通常の依存として入れる。同じ版が依存に入っていれば入れ直さない。ワークスペースでは、リポジトリの端（`.git` のある場所）まで上位を探す。`packageManager` と lockfile が食い違えば選ばずに `package_manager_conflict` で止まる。
 3. 同梱のskill（[`skills/cozeni-setup/`](skills/cozeni-setup/SKILL.md)）を `.agents/skills/cozeni-setup` にコピーする。Claude Code の実行環境（`CLAUDECODE`）か、プロジェクトに `.claude/` があれば `.claude/skills/cozeni-setup` にもコピーする。シンボリックリンクは使わず、既存のものはこの版のskillで置き換える（同じ中身なら何もしない）。途中の `.agents`・`.agents/skills`・`.claude`・`.claude/skills` がシンボリックリンクだったり、実体がプロジェクトの外にあったりすれば、書き込まずに `unsafe_path` で止まる。
-4. 接続先（プロファイル）と、そのプロファイルで使うクリエイターを設定ファイルに覚える（下の「既定のプロファイル」）。`--profile` を省略した再実行では、今の既定のプロファイルを引き継ぐ。保存済みのプロファイルは `--profile` だけで再初期化でき、接続先を指定し直す必要はない。
+4. 接続先（プロファイル）と、そのプロファイルで使うクリエイターを設定ファイルに覚える（下の「既定のプロファイル」）。**`--profile` を付けずに `--creator` を渡すと、本番の管理画面の導入プロンプトの形として、本番のクリエイターIDを `production` の期待値に保存し、既定のプロファイルを `sandbox` にする**（サンドボックスではクリエイターを照合しない）。`--profile production` を付けると、サンドボックスを使わず本番に直接つなぐ。`--profile` も `--creator` も省略した再実行では、今の既定のプロファイルを引き継ぐ。保存済みのプロファイルは `--profile` だけで再初期化でき、接続先を指定し直す必要はない。
 
 package manager の出力は表示しません（認証情報を含みうるため）。失敗したら、実行したコマンド（`error.command`）と終了コード（`error.exit_code`）を `install_failed` で返すので、同じコマンドを手で実行して原因を確かめてください。手で入れる場合は `npm install @nulogic/cozeni-sdk`（または `bun add` / `pnpm add` / `yarn add`）です。
 
@@ -45,17 +45,33 @@ Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは�
 | 管理画面・購入リンク | `https://app.cozeni.net` | `https://app-sandbox.cozeni.net` |
 | APIキー | `cozeni_sk_` + 64桁 | `cozeni_sk_sandbox_` + 64桁 |
 
-- `init --profile sandbox` で既定のプロファイルを `sandbox` にすると、以後のCLIは指定なしでサンドボックスにつながります。ログインもサンドボックスのアカウントで別に行います。
+- 本番の管理画面の導入プロンプトの `init --creator <本番のクリエイターID>`（`--profile` なし）は、既定のプロファイルを `sandbox` にし、本番のIDを `production` の期待値として保存します。サンドボックスのログインではクリエイターを照合せず、本番に切り替えるときのログインで照合します（別のアカウントなら `creator_mismatch`）。以後のCLIは指定なしでサンドボックスにつながります。ログインもサンドボックスのアカウントで別に行います。
+- サンドボックスの管理画面の導入プロンプト（`init --profile sandbox --creator <サンドボックスのクリエイターID>`）は、サンドボックスのクリエイターIDで照合し、本番へは切り替えません。
+- サンドボックスを使わず本番に直接つなぐときは、`init --creator <本番のクリエイターID> --profile production` を使います（テスト購入はできません）。
 - CLIは、サンドボックスのキーを本番へ、本番のキーをサンドボックスへ送ろうとすると、送らずに `environment_mismatch` で止まります（`COZENI_API_KEY` も同じです）。
 - `COZENI_ENVIRONMENT` は `production` か `sandbox` だけを受け付けます。ほかの値や、`COZENI_API_ORIGIN` が別の環境を指しているときは問い合わせず、購入者には `unavailable` として扱い、理由をサーバーのログに出します。開発サーバー（`NODE_ENV` が `production` 以外）では、最初の問い合わせで接続先の環境名をログに出します。
 
-### 本番へ移る
+### テスト購入
 
-商品・購入リンク・アカウントは環境ごとに別のため、サンドボックスで作ったものは本番では使えません。
+`npx cozeni test-purchase --product <商品ID> --site-origin <開発サーバーのURL> --json` は、サンドボックスでだけ動きます。サーバーがテストカードで決済を確定させ、CLI が限定ページに入れることを確かめて返金します。
 
-1. 本番の管理画面でアカウントを用意し、本番で `init` をやり直す（`npx @nulogic/cozeni-sdk@<版> init --creator <本番のクリエイターID> --profile production`）。続けて `npx cozeni login` する。
-2. 本番で商品を作り直し（`npx cozeni products create`）、コード中の商品IDと購入リンクを本番のものに差し替える。
-3. サイトの環境変数から `COZENI_ENVIRONMENT` を外す（または `production` にする）。
+1. `production` プロファイル、または `localhost`・`127.0.0.1`・`[::1]` 以外の `--site-origin` では、何も送らずに止まります（`test_purchase_unavailable`・`site_origin_not_allowed`、終了コード2）。サーバーも本番では受け付けません。
+2. 購入権ができるまで、`login --complete` と同じ間隔（5秒）で打ち直し、最長90秒待ちます。間に合わなければ終了コード6（`authorization_pending`）で、同じコマンドを打ち直します（処理中の決済があれば新たに決済しません）。
+3. サーバーが返すワンタイムコードは**出力しません**。商品の限定ページ（`access_url` のパス）を `--site-origin` 上で `?cozeni_code=` 付きで要求し、303で戻ったページへ Cookie を付けて入れること、続けて Cookie なしで同じページを要求して Cozeni の入場画面（`enter_url`）へ送られることを確かめます。
+4. 確かめたら返金します。入場の確認に失敗したときは返金せず（`entry_check_failed`、終了コード4）、直して打ち直せば、既存の購入権を確かめてから返金します。
+5. Stripe の連携が済んでいないとき（409 `creator_not_ready`）は、`error.hint` に連携の依頼と待ち方を示します。
+
+```json
+{"ok":true,"data":{"profile":"sandbox","product_id":"prd_…","site_origin":"http://localhost:3000","entered":true,"redirected_when_unpurchased":true,"refunded":true,"refund_count":1,"next_step":"利用者への1通の案内（AIへの指示）"}}
+```
+
+### 本番へ切り替える
+
+テスト購入が通ったら、本番にログインします（`npx cozeni login --profile production`）。
+
+- 承認が完了し、期待するクリエイターと一致したら、`login --complete --profile production` が既定のプロファイルを `production` に書き換えます（`data.switched_to_production: true`）。以後のCLIは指定なしで本番につながります。
+- 本番にログイン済みで一致していれば、承認は求めません。`login` の `next_step` が、利用者に「切り替えてよいか」を聞くよう案内します。返事を得たら `npx cozeni switch` を実行します。
+- 切り替えたら、本番で同じ内容の商品を作り直し（`npx cozeni products create`。同じ内容があれば作らずに返す）、コード中の商品IDと購入リンクを本番のものに差し替え、サイトの環境変数から `COZENI_ENVIRONMENT` を外します。
 
 サンドボックスの商品IDが本番のコードに残っていても、本番では権利が無い（`no_grant`）として扱われるだけで、エラーにはなりません。差し替え漏れは `npx cozeni products get <商品ID>` で確かめてください。
 
@@ -82,6 +98,8 @@ npx cozeni <コマンド> [--json] [--profile <名前>] [--yes]
 | `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す。同じ内容の有効な商品があれば作らずにそれを返す（`--allow-duplicate` で作る） |
 | `products update <商品ID> [--name] [--price] [--access-url]` | 商品を変更する |
 | `link <商品ID>` | 標準の購入リンクを取得する（無ければ発行） |
+| `test-purchase --product <商品ID> --site-origin <URL>` | サンドボックス専用。テスト購入して限定ページに入れることを確かめ、返金する（上の「テスト購入」） |
+| `switch` | 本番にログイン済みで期待するクリエイターと一致していれば、既定のプロファイルを `production` にする（上の「本番へ切り替える」） |
 
 ### ログイン
 
@@ -104,7 +122,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 `init` は `$XDG_CONFIG_HOME/cozeni/config.json` に、既定のプロファイル（`default_profile`）と、プロファイルごとの期待するクリエイター（`expected_creator_id`）を保存します。秘密は含みません。
 
-- `--profile` を省略すると、`default_profile`（無ければ `production`）を使います。`init` の `--profile` の既定は `production` です。
+- `--profile` を省略すると、`default_profile`（無ければ `production`）を使います。`init` は `--profile` も `--creator` も省略した再実行では今の既定を引き継ぎ、`--creator` だけなら本番の管理画面のプロンプトの形（既定を `sandbox` にする）になります。
 - `production`（本番）と `sandbox`（サンドボックス）の接続先は固定で、`--api-origin`・`--app-origin`・`COZENI_API_ORIGIN` での変更を受け付けません。ログインでサーバーが返す環境がプロファイル名と違えば、キーを保存しません。それ以外のプロファイルは、`init` で `--api-origin` と `--app-origin` を必須にし、プロファイルと一緒に保存します。以後のコマンドでは省略できます（指定 → `COZENI_API_ORIGIN` → 保存した値の順）。保存済みのキーは、発行されたオリジンにしか送りません。
 - 期待するクリエイターがあるプロファイルでは、使うキーのクリエイター（保存したキーなら保存値、`COZENI_API_KEY` なら `GET /account` の結果）が違えば、変更系の要求を送る前に `creator_mismatch` で止まります。
 
@@ -121,10 +139,10 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 |---|---|---|
 | 0 | 成功 | — |
 | 1 | 想定外のエラー | `internal`・`invalid_response`・`insecure_storage`・`invalid_state`・`install_failed`・`package_manager_conflict`・`unsafe_path` |
-| 2 | 使い方の誤り・確認が必要 | `invalid_input`・`confirmation_required`・`origin_mismatch`・`environment_mismatch` |
+| 2 | 使い方の誤り・確認が必要 | `invalid_input`・`confirmation_required`・`origin_mismatch`・`environment_mismatch`・`test_purchase_unavailable`・`site_origin_not_allowed` |
 | 3 | ログインが必要 | `login_required`・`key_expired`・`access_denied`・`expired_token` |
-| 4 | 権限・規約・状態で拒否 | `terms_consent_required`・`forbidden`・`not_found`・`product_archived`・`idempotency_conflict`・`creator_mismatch` |
-| 5 | 通信できない・一時障害 | `network_unreachable`・`unexpected_redirect`・`rate_limited`・`unavailable` |
+| 4 | 権限・規約・状態で拒否 | `terms_consent_required`・`forbidden`・`not_found`・`product_archived`・`idempotency_conflict`・`creator_mismatch`・`creator_not_ready`・`entry_check_failed` |
+| 5 | 通信できない・一時障害 | `network_unreachable`・`unexpected_redirect`・`rate_limited`・`unavailable`・`stripe_error`・`site_unreachable` |
 | 6 | 承認待ち | `authorization_pending` |
 
 通信できないときは、Codex cloud や Claude Code on the web などクラウドで動くツール向けに、`api.cozeni.net` への通信を許可する手順を `hint` に示します。429では `retry_after_seconds` を返します。
@@ -292,4 +310,4 @@ bun run check
 
 `bun run test:next-runtime` は `check` に含みます（`check` では直前に `build` が走ります）。現在の `dist` をnpm packしたtarball（`scripts/example-consumer.mjs`）で一時consumerを作り、Next.js 16（`proxy.ts`）と15（`middleware.ts`）のそれぞれで `bun install` / `next build` / `next start` まで行います。単独で実行するときは、先に `bun run build` を実行してください（packは `--ignore-scripts` のため、古い `dist` のまま検証してしまいます）。ローカルのCozeni API互換モックを起動し、実際に起動した本番相当サーバーへHTTPで到達して、ハンドオフの交換とコード除去、印の設定と消去、外部enter_urlへのリダイレクトと停止条件、Route Handlerが実際にリダイレクトしないことを確認します。Server Actionの非リダイレクト・plain object返却はNext.jsのAction ID解決が実HTTPでは複雑なため、vitestのユニットテスト（`examples/nextjs/tests/security.test.ts`）側で検証します。
 
-CLIのテスト（`tests/cli.test.ts`・`tests/cli-store.test.ts`）は、通信をモックし、一時ディレクトリを `XDG_CONFIG_HOME` にして、保存ファイルの権限と置き換えを含めて検証します。
+CLIのテスト（`tests/cli.test.ts`・`tests/cli-sandbox-flow.test.ts`・`tests/cli-store.test.ts`）は、通信をモックし、一時ディレクトリを `XDG_CONFIG_HOME` にして、保存ファイルの権限と置き換えを含めて検証します。
