@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.6.3 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.6.4 init --creator <クリエイターID>
 ```
 
 `--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
@@ -44,7 +44,7 @@ Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは�
 | CLI | 指定なし（`production` プロファイル） | `--profile sandbox` |
 | SDK（サイト） | 指定なし | 環境変数 `COZENI_ENVIRONMENT=sandbox` |
 | API | `https://api.cozeni.net` | `https://api-sandbox.cozeni.net` |
-| 管理画面 | `https://cozeni.net` | `https://app-sandbox.cozeni.net` |
+| 管理画面 | `https://cozeni.net` | `https://sandbox.cozeni.net` |
 | 購入リンク | `https://checkout.cozeni.net` | `https://checkout-sandbox.cozeni.net` |
 | APIキー | `cozeni_sk_` + 64桁 | `cozeni_sk_sandbox_` + 64桁 |
 
@@ -169,7 +169,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 **Windowsではファイル権限の検査を行いません**（権限ビットで所有者だけに絞れないため）。Windowsでは `XDG_CONFIG_HOME` を共有フォルダや同期フォルダに向けないでください。
 
-キーは発行された接続先にだけ送ります。`production`（既定）の接続先は `https://api.cozeni.net` と `https://cozeni.net`、`sandbox` は `https://api-sandbox.cozeni.net` と `https://app-sandbox.cozeni.net` に固定です。キーを付けた要求はリダイレクトを追いません。
+キーは発行された接続先にだけ送ります。`production`（既定）の接続先は `https://api.cozeni.net` と `https://cozeni.net`、`sandbox` は `https://api-sandbox.cozeni.net` と `https://sandbox.cozeni.net` に固定です。キーを付けた要求はリダイレクトを追いません。
 
 環境変数 `COZENI_API_KEY` があれば、保存したキーより優先して使います（CIなど向け）。`logout` はこのキーを失効させません。
 

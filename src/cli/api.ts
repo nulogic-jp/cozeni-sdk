@@ -15,7 +15,7 @@ export { CLI, INIT_CLI };
 export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://cozeni.net";
 export const SANDBOX_API_ORIGIN = "https://api-sandbox.cozeni.net";
-export const SANDBOX_APP_ORIGIN = "https://app-sandbox.cozeni.net";
+export const SANDBOX_APP_ORIGIN = "https://sandbox.cozeni.net";
 // 購入者面（checkout・enter）。管理画面とは別のサブドメインに置かれる（本体 docs N-2）。
 export const PRODUCTION_CHECKOUT_ORIGIN = "https://checkout.cozeni.net";
 export const SANDBOX_CHECKOUT_ORIGIN = "https://checkout-sandbox.cozeni.net";

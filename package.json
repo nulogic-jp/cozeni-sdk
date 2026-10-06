@@ -1,6 +1,6 @@
 {
   "name": "@nulogic/cozeni-sdk",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Cozeni外部API用のサーバー向けJavaScript SDKとCLI",
   "license": "MIT",
   "repository": {

@@ -165,7 +165,7 @@ describe("init", () => {
     expect(t.parsed().data).toMatchObject({
       profile: "sandbox",
       api_origin: "https://api-sandbox.cozeni.net",
-      app_origin: "https://app-sandbox.cozeni.net",
+      app_origin: "https://sandbox.cozeni.net",
       expected_creator_id: null,
       production_expected_creator_id: "cre_abc",
       next_step: "npx cozeni login",
@@ -478,7 +478,7 @@ describe("init", () => {
     expect(t.parsed().data).toMatchObject({
       profile: "sandbox",
       api_origin: "https://api-sandbox.cozeni.net",
-      app_origin: "https://app-sandbox.cozeni.net",
+      app_origin: "https://sandbox.cozeni.net",
       next_step: "npx cozeni login",
     });
     expect(await createStore({ XDG_CONFIG_HOME: home }).loadConfig()).toEqual({
