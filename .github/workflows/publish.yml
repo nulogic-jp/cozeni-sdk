@@ -86,9 +86,12 @@ jobs:
           printf '{"private":true,"type":"module"}\n' > "$consumer_directory/package.json"
 
           # publish成功後もregistryへ反映されるまで数十秒かかることがある。
+          # registryはpackumentを max-age=300 で返すため、未反映の一覧が手元のcacheに残ると
+          # 再試行しても同じ一覧を読み続ける。毎回registryへ問い合わせる。
           for attempt in 1 2 3 4 5 6; do
             if npm install \
               --prefix "$consumer_directory" \
+              --prefer-online \
               --save-exact \
               --ignore-scripts \
               --no-audit \
