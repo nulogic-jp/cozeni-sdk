@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.6.1 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.6.2 init --creator <クリエイターID>
 ```
 
 `--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
@@ -69,7 +69,7 @@ Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは�
 
 ### 本番へ切り替える
 
-テスト購入が通ったら、本番にログインします（`npx cozeni login --profile production`）。
+テスト購入が通ったら、利用者に「サンドボックスで確認できたので、本番を導入してよいですか？」と尋ね、許可を得てから本番にログインします（`npx cozeni login --profile production`）。
 
 - 承認が完了し、期待するクリエイターと一致したら、`login --complete --profile production` が既定のプロファイルを `production` に書き換えます（`data.switched_to_production: true`）。以後のCLIは指定なしで本番につながります。
 - 本番にログイン済みで一致していれば、承認は求めません。`login` の `next_step` が、利用者に「切り替えてよいか」を聞くよう案内します。返事を得たら `npx cozeni switch` を実行します。
