@@ -20,6 +20,8 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 npx @nulogic/cozeni-sdk@0.6.0 init --creator <クリエイターID>
 ```
 
+`--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
+
 `init` は次を行います（通信するのは package manager だけです）。
 
 1. 実行した場所から上へたどって `package.json` のある場所をプロジェクトのルートにする。

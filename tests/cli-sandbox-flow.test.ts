@@ -384,6 +384,8 @@ describe("test-purchase", () => {
       handoff?: "ok" | "invalid_code";
       open?: boolean;
       codeIgnored?: boolean;
+      // 権利が付かない（交換は成功するが、購入権が無い）。
+      noGrant?: boolean;
     } = {},
   ): Handler {
     return ({ url, headers }) => {
@@ -405,6 +407,14 @@ describe("test-purchase", () => {
         return response;
       }
       const cookie = headers.get("Cookie") ?? "";
+      // 印が付いた要求は、権利が無くてもリダイレクトせず、200の拒否表示を返す（11 §8.3）。
+      if (options.noGrant)
+        return cookie.includes("cozeni_handoff=")
+          ? new Response("表示できません", { status: 200 })
+          : new Response(null, {
+              status: 307,
+              headers: { Location: enterUrl },
+            });
       if (options.open || cookie.includes("cozeni_customer="))
         return new Response("限定ページ", { status: 200 });
       return new Response(null, {
@@ -641,6 +651,22 @@ describe("test-purchase", () => {
       reason: "handoff_not_handled",
     });
     expect(t.parsed().error.hint).toContain("proxy");
+    expect(t.calls.some((call) => call.url === refund)).toBe(false);
+  });
+  it("権利が付かなければ、印付きの200の拒否表示を「入れた」と誤判定せず、返金しない", async () => {
+    const t = cli(api({ site: site({ noGrant: true }) }));
+    const { code } = await t.run(...args);
+    expect(code).toBe(4);
+    expect(t.parsed().error).toMatchObject({
+      code: "entry_check_failed",
+      entered: false,
+      reason: "redirected_away",
+    });
+    // 確認の要求に、停止用の印を付けない。
+    const checks = t.calls.filter((call) => call.url.startsWith(SITE));
+    expect(checks[1]?.headers.get("Cookie") ?? "").not.toContain(
+      "cozeni_handoff",
+    );
     expect(t.calls.some((call) => call.url === refund)).toBe(false);
   });
   it("コードを交換できなければ COZENI_ENVIRONMENT を案内する", async () => {

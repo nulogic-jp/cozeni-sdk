@@ -180,6 +180,9 @@ class CookieJar {
   get(name: string): string | undefined {
     return this.cookies.get(name);
   }
+  delete(name: string): void {
+    this.cookies.delete(name);
+  }
   store(response: Response): void {
     for (const line of response.headers.getSetCookie()) {
       const [pair = "", ...attributes] = line.split(";");
@@ -281,8 +284,14 @@ async function checkEntry(
     return {
       entered: false,
       reason: mark === "invalid_code" ? "invalid_code" : "handoff_unavailable",
-      hint: "サイトがコードを交換できませんでした。サイトの環境変数に COZENI_ENVIRONMENT=sandbox（と COZENI_SITE_ORIGIN）が設定され、開発サーバーを再起動したか確かめてください。",
+      hint:
+        mark === "invalid_code"
+          ? "サイトがコードを交換できませんでした。サイトの環境変数に COZENI_ENVIRONMENT=sandbox が設定され、開発サーバーを再起動したか確かめてください。"
+          : "サイトから Cozeni に接続できませんでした。開発サーバーのネットワークと、COZENI_API_ORIGIN・COZENI_ENVIRONMENT の設定を確かめてください。",
     };
+  // 印は無限リダイレクトの停止用で、確認には要らない。付けたままだと、権利が無くても
+  // requireEntitlement がリダイレクトせず200の拒否表示を返し、入れたかどうかを区別できない。
+  jar.delete("cozeni_handoff");
   let target = localTarget(response, first, site);
   if (!target || target.searchParams.has("cozeni_code"))
     return {
