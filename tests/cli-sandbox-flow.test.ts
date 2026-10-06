@@ -197,7 +197,7 @@ describe("本番へのログイン（V-23）", () => {
     expires_at: "2026-11-05T00:00:00.000Z",
   });
 
-  it("ログイン済みで一致していれば承認を求めず、切り替えてよいか聞くよう案内し、既定は変えない", async () => {
+  it("ログイン済みで一致していれば承認を求めず、本番への導入の許可を得ているか確かめてから切り替えるよう案内し、既定は変えない", async () => {
     await sandboxFirst();
     await saveCredential("production");
     const t = cli(() => json(account("production")));
@@ -206,7 +206,8 @@ describe("本番へのログイン（V-23）", () => {
     ).toBe(0);
     const data = t.parsed().data;
     expect(data.already_logged_in).toBe(true);
-    expect(data.next_step).toContain("切り替えてよいですか");
+    expect(data.next_step).toContain("本番を導入してよいですか");
+    expect(data.next_step).toContain("許可をすでに得ていれば");
     expect(data.next_step).toContain("npx cozeni switch");
     expect(await defaultProfile()).toBe("sandbox");
   });
@@ -605,8 +606,17 @@ describe("test-purchase", () => {
       "login --profile production",
       "login --complete --profile production",
       SITE,
+      // 本番へ進む前に、利用者の許可を取る。
+      "サンドボックスで確認できたので、本番を導入してよいですか？",
+      "返事を待",
     ])
       expect(data.next_step).toContain(text);
+    // 許可を聞く前に本番のログインを始めない（承認URLを先に渡さない）。
+    const step = String(data.next_step);
+    expect(step.indexOf("本番を導入してよいですか")).toBeLessThan(
+      step.indexOf("login --profile production"),
+    );
+    expect(step).not.toContain("先に `npx cozeni login --profile production");
     for (const secret of [HANDOFF_CODE, CUSTOMER_COOKIE, sandboxKey]) {
       expect(out).not.toContain(secret);
       expect(err).not.toContain(secret);
