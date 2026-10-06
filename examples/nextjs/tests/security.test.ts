@@ -28,7 +28,7 @@ import { PRODUCT_ID } from "../lib/cozeni";
 import nextConfig from "../next.config";
 import { config, proxy } from "../proxy";
 
-const enterUrl = `https://app.cozeni.net/enter?product_id=${PRODUCT_ID}`;
+const enterUrl = `https://checkout.cozeni.net/enter?product_id=${PRODUCT_ID}`;
 beforeEach(() => {
   state.cookies.clear();
   state.cookies.set("cozeni_customer", "valid.token.jwt");

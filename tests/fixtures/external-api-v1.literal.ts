@@ -16,7 +16,7 @@ export const fixture = {
       blockers: [
         {
           code: "review_rejected",
-          action_url: "https://app.cozeni.net/settings/onboarding",
+          action_url: "https://cozeni.net/settings/onboarding",
           rejection: {
             reason_code: "tokushoho_missing_contact",
             note: "特定商取引法の連絡先を確認できませんでした",
@@ -24,7 +24,7 @@ export const fixture = {
         },
         {
           code: "stripe_onboarding_incomplete",
-          action_url: "https://app.cozeni.net/settings/onboarding",
+          action_url: "https://cozeni.net/settings/onboarding",
         },
       ],
       warnings: [],

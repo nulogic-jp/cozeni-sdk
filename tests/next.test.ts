@@ -27,7 +27,7 @@ import {
 } from "../src/next.js";
 
 const SITE = "https://creator.example";
-const ENTER = "https://app.cozeni.net/enter?product_id=prd_1";
+const ENTER = "https://checkout.cozeni.net/enter?product_id=prd_1";
 let fetch: ReturnType<typeof vi.fn>;
 function api(respond: (path: string, body: unknown) => Response) {
   fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

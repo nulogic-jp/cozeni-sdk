@@ -77,7 +77,7 @@ export async function GET() {
 CLI が返した購入リンクを `<a>` で置くだけ。ルートも秘密も要らない。
 
 ```tsx
-<a href="https://app.cozeni.net/checkout/...">購入する</a>
+<a href="https://checkout.cozeni.net/checkout/...">購入する</a>
 ```
 
 ## 5. 環境変数

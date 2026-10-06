@@ -14,7 +14,7 @@ import { satisfies, skillRange } from "../src/cli/skill-version.js";
 import { createStore } from "../src/cli/store.js";
 
 const API = "https://api.cozeni.net";
-const APP = "https://app.cozeni.net";
+const APP = "https://cozeni.net";
 const START = Date.parse("2026-09-25T00:00:00.000Z");
 const version = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -242,7 +242,7 @@ describe("login（2段階）", () => {
     const t = cli(() =>
       json({
         ...deviceCode,
-        verification_uri_complete: "http://app.cozeni.net/device?code=X",
+        verification_uri_complete: "http://cozeni.net/device?code=X",
       }),
     );
     await t.run("login", "--json");

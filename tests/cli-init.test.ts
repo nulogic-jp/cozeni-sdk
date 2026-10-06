@@ -140,7 +140,7 @@ describe("init", () => {
       skills: [{ path: ".agents/skills/cozeni-setup", status: "created" }],
       profile: "production",
       api_origin: "https://api.cozeni.net",
-      app_origin: "https://app.cozeni.net",
+      app_origin: "https://cozeni.net",
       expected_creator_id: "cre_abc",
       next_step: "npx cozeni login",
     });
