@@ -10,6 +10,8 @@ const PROD_API = "https://api.cozeni.net";
 const PROD_APP = "https://app.cozeni.net";
 const SBX_API = "https://api-sandbox.cozeni.net";
 const SBX_APP = "https://app-sandbox.cozeni.net";
+// 購入者面（checkout / enter）。本体は enter_url を CHECKOUT_BASE_URL から組み立てる（N-2）。
+const SBX_CHECKOUT = "https://checkout-sandbox.cozeni.net";
 const SITE = "http://localhost:3000";
 const START = Date.parse("2026-10-06T00:00:00.000Z");
 const PRODUCT_ID = `prd_${"0".repeat(32)}`;
@@ -482,7 +484,7 @@ describe("test-purchase", () => {
   };
   const start = `${SBX_API}/external/v1/products/${PRODUCT_ID}/test-purchase`;
   const refund = `${start}/refund`;
-  const enterUrl = `${SBX_APP}/enter?product_id=${PRODUCT_ID}`;
+  const enterUrl = `${SBX_CHECKOUT}/enter?product_id=${PRODUCT_ID}`;
 
   /** 開発サーバー（SDK の proxy）の振る舞い。 */
   function site(
@@ -492,8 +494,11 @@ describe("test-purchase", () => {
       codeIgnored?: boolean;
       // 権利が付かない（交換は成功するが、購入権が無い）。
       noGrant?: boolean;
+      // 未購入のときに送る入場画面（既定はサンドボックスの購入者面）。
+      enter?: string;
     } = {},
   ): Handler {
+    const enter = options.enter ?? enterUrl;
     return ({ url, headers }) => {
       const target = new URL(url);
       if (target.searchParams.has("cozeni_code")) {
@@ -519,13 +524,13 @@ describe("test-purchase", () => {
           ? new Response("表示できません", { status: 200 })
           : new Response(null, {
               status: 307,
-              headers: { Location: enterUrl },
+              headers: { Location: enter },
             });
       if (options.open || cookie.includes("cozeni_customer="))
         return new Response("限定ページ", { status: 200 });
       return new Response(null, {
         status: 307,
-        headers: { Location: enterUrl },
+        headers: { Location: enter },
       });
     };
   }
@@ -751,6 +756,34 @@ describe("test-purchase", () => {
     expect(t.calls.some((call) => call.url === refund)).toBe(false);
     expect(out).not.toContain(HANDOFF_CODE);
   });
+  it.each([
+    [
+      "本番の購入者面",
+      `https://checkout.cozeni.net/enter?product_id=${PRODUCT_ID}`,
+    ],
+    ["サンドボックスの管理画面", `${SBX_APP}/enter?product_id=${PRODUCT_ID}`],
+  ])(
+    "未購入のとき%sの入場画面へ送られたら、別の環境と報告し、返金しない",
+    async (_label, enter) => {
+      const t = cli(api({ site: site({ enter }) }));
+      const { code } = await t.run(...args);
+      expect(code).toBe(4);
+      expect(t.parsed().error).toMatchObject({
+        code: "entry_check_failed",
+        entered: true,
+        redirected_when_unpurchased: false,
+        refunded: false,
+        reason: "enter_url_other_environment",
+      });
+      // 実際の転送先と期待したオリジンを示す。
+      const { hint } = t.parsed().error;
+      expect(hint).toContain(`${new URL(enter).origin}/enter`);
+      expect(hint).toContain(`${SBX_CHECKOUT}/enter`);
+      expect(hint).toContain("proxy");
+      expect(hint).toContain("購入リンク");
+      expect(t.calls.some((call) => call.url === refund)).toBe(false);
+    },
+  );
   it("サイトがコードを処理しなければ、proxy の確認を案内し、返金しない", async () => {
     const t = cli(api({ site: site({ codeIgnored: true }) }));
     const { code } = await t.run(...args);
