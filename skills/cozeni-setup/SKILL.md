@@ -49,7 +49,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
    - `data.already_logged_in` が `true` なら、ログイン済み。3へ進む。
    - そうでなければ、すぐに終わって `data.verification_uri_complete`（無ければ `data.verification_uri`）と `data.user_code`、そして `data.next_step`（利用者への伝え方）を返す。
 2. 利用者に「このURLをブラウザで開き、表示されたコードが `<user_code>` と同じか確かめてから許可してください」と伝え、**許可したと返事があるまで待つ**。
-   - 既定の接続先がサンドボックスのとき、**この依頼で1回だけ**「実際にはお金が動かないテスト用の環境（サンドボックス）」と説明し、まだ登録していなければ承認の画面から会員登録してもらう（メール確認のあと承認の画面に戻る。審査の申請は求めない）。**以後は「サンドボックス」と言わず「テスト」と呼ぶ。**
+   - 既定の接続先がサンドボックスのとき、**この依頼で1回だけ**「実際にはお金が動かないテスト用の環境（サンドボックス）」と説明し、まだ登録していなければ承認の画面から会員登録してもらう（メール確認のあと承認の画面に戻る。販売者の情報の申請は求めない）。**以後は「サンドボックス」と言わず「テスト」と呼ぶ。**
 3. `npx cozeni login --complete --json` を実行する。
    - 終了コード6（`authorization_pending`）：まだ許可されていない。利用者に許可したか確かめてから、同じコマンドを打ち直す。
    - 終了コード3（`access_denied`・`expired_token` など）：手順1の `login` からやり直す。
@@ -59,7 +59,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 `npx cozeni status --json` で、接続先（`data.environment`）、クリエイター、販売状態、既存の商品を確かめる。`next_actions` があっても導入は続けてよい。
 
-**テスト用の接続先（`data.environment` が `sandbox`）で Stripe の連携が未完了なら、`data.next_step` に従う。** 5 の商品の確認と同じ1通で、利用者にテスト用の Stripe 連携を頼む（Stripe の画面で「テストデータを使う」を押し、SMS のコードに `000-000` を入力する。URL は `data.next_actions` の `action_url`）。**連携を待たずに** 商品の作成と実装を進め、`test-purchase`（8）の前にもう一度 `status` で `sales.can_sell` が `true` になったことを確かめる。
+**テスト用の接続先（`data.environment` が `sandbox`）で売上の受け取り先の登録が未完了なら、`data.next_step` に従う。** 5 の商品の確認と同じ1通で、利用者に売上の受け取り先のテスト登録を頼む（決済サービスの画面で「テストデータを使う」を押し、SMS のコードに `000-000` を入力する。URL は `data.next_actions` の `action_url`）。**登録を待たずに** 商品の作成と実装を進め、`test-purchase`（8）の前にもう一度 `status` で `sales.can_sell` が `true` になったことを確かめる。
 
 ### 4. サイトのアドレス（`siteOrigin`）を決める
 
@@ -74,7 +74,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 `status` の `data.products` を見て、利用者に何を売るかを確かめる。
 
 - **既存の商品を使う**：`npx cozeni products get <商品ID> --json` で内容と購入リンクを確かめる。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx cozeni link <商品ID> --json` で発行する。
-- **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`）を、利用者に1回でまとめて確認する（サンドボックスから始めるときは、3 の Stripe 連携の依頼と、本番の公開アドレスの確認も同じ1通に入れる）。同意を得たら次を実行する。
+- **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`）を、利用者に1回でまとめて確認する（サンドボックスから始めるときは、3 の売上の受け取り先の登録の依頼と、本番の公開アドレスの確認も同じ1通に入れる）。同意を得たら次を実行する。
 
   ```sh
   npx cozeni products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
@@ -109,7 +109,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 開発サーバーを起動したまま、`npx cozeni test-purchase --product <prd_…> --site-origin <開発サーバーのアドレス> --json` を実行する。**サーバーがテストカードで決済を確定させ、CLI が限定ページに入れることと、未購入では `enter_url` へ送られることを確かめて返金する。** ワンタイムコードは出力されない。決済画面は操作しない。`--site-origin` は `localhost`・`127.0.0.1`・`[::1]` のアドレスに限る。本番（`production` プロファイル）では動かない。
 
 - 終了コード6（`authorization_pending`）：購入権ができるまで待っている。同じコマンドを打ち直す（二重に決済しない）。
-- `creator_not_ready`（終了コード4）：Stripe の連携が済んでいない。`error.hint` に従い、利用者に連携を頼んで待ち、`status` で確かめてから打ち直す。
+- `creator_not_ready`（終了コード4）：売上の受け取り先の登録が済んでいない。`error.hint` に従い、利用者に登録を頼んで待ち、`status` で確かめてから打ち直す。
 - `entry_check_failed`（終了コード4）：限定ページに入れない、または未購入でも `enter_url` へ送られない。`error.hint`・`error.reason` を見てコードを直し、打ち直す（購入権は残っているので、決済せず確認から行い、確認が済んだら返金する）。
 - `site_unreachable`（終了コード5）：開発サーバーに届かない。起動を確かめて打ち直す。
 - 成功したら `data.next_step` に従い、**1通で次を利用者に伝える**。
@@ -164,6 +164,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 ## 販売状態の読み方（`status --json`）
 
 - `data.message_for_user`：利用者にそのまま見せる「次にやること」。言い換えない。
+- 利用者には「Stripe」「連携」と言わず、管理画面と同じ「売上の受け取り先の登録」「販売者の情報の申請」と呼ぶ。手続きが複数あるときは `data.message_for_user` の順番（受け取り先 → 販売者の情報）のまま伝える。
 - `data.sales.can_sell` が `true`：アカウントとしては販売できる。それでも買えないなら、`data.products` で対象商品の `status` を確かめる。
 - `data.next_actions`：販売を始めるまでに利用者がすること。各項目に `message` と `action_url` がある。`review_rejected` には `rejection.reason_code` と `rejection.note`（差し戻しの理由）が付く。
 - `data.sales.warnings` に `payouts_disabled`：販売はできるが、売上の入金が止まっている。

@@ -112,23 +112,27 @@ function productLine(product: Product): string {
 }
 
 const blockerMessages: Record<SalesBlocker["code"], string> = {
-  review_not_submitted: "審査を申請してください。",
-  review_pending: "審査の完了を待ってください。",
-  review_rejected: "審査で差し戻されました。指摘を直して再申請してください。",
-  stripe_not_connected: "Stripeアカウントを接続してください。",
-  stripe_onboarding_incomplete: "Stripeの登録を完了してください。",
-  stripe_verification_pending: "Stripeの本人確認の完了を待ってください。",
+  review_not_submitted: "販売者の情報を申請してください。",
+  review_pending: "販売者の情報の審査が終わるのを待ってください。",
+  review_rejected:
+    "販売者の情報の申請が差し戻されました。指摘を直して申請し直してください。",
+  stripe_not_connected: "売上の受け取り先を登録してください。",
+  stripe_onboarding_incomplete:
+    "売上の受け取り先の登録が途中です。続きから入力してください。",
+  stripe_verification_pending:
+    "売上の受け取り先の確認が終わるのを待ってください。",
 };
 
-// サンドボックスでは、Stripe の連携は本番と同じ画面でテストデータを使って行う（V-21）。
+// サンドボックスでは、売上の受け取り先（Stripe）の登録は本番と同じ画面でテストデータを使って行う（V-21）。
 // 名前の「サンドボックス」は登録をお願いするときに1回だけ出し、以後は「テスト」と呼ぶ（V-25）。
+// 利用者には決済事業者名を出さず、管理画面と同じ「売上の受け取り先」と呼ぶ。
 const SANDBOX_STRIPE_STEPS =
-  "Stripe の画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力してください。";
+  "決済サービスの画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力してください。";
 const sandboxBlockerMessages: Partial<Record<SalesBlocker["code"], string>> = {
-  stripe_not_connected: `テスト用の Stripe 連携をお願いします。${SANDBOX_STRIPE_STEPS}`,
-  stripe_onboarding_incomplete: `テスト用の Stripe 連携を完了してください。${SANDBOX_STRIPE_STEPS}`,
+  stripe_not_connected: `テスト用に、売上の受け取り先を登録してください。${SANDBOX_STRIPE_STEPS}`,
+  stripe_onboarding_incomplete: `テスト用の売上の受け取り先の登録が途中です。続きから入力してください。${SANDBOX_STRIPE_STEPS}`,
   stripe_verification_pending:
-    "テスト用の Stripe 連携の確認が終わるのを待ってください。",
+    "テスト用の売上の受け取り先の確認が終わるのを待ってください。",
 };
 
 export async function status(
@@ -197,7 +201,7 @@ export async function status(
   };
 }
 
-/** 次に打つコマンド。サンドボックスで Stripe の連携が未完了なら、利用者への依頼を AI への指示として返す（V-21）。 */
+/** 次に打つコマンド。サンドボックスで売上の受け取り先の登録が未完了なら、利用者への依頼を AI への指示として返す（V-21）。 */
 function statusNextStep(
   session: Session,
   sandbox: boolean,
@@ -213,8 +217,8 @@ function statusNextStep(
   );
   if (sandbox && stripe.length > 0)
     return [
-      `商品名・価格・限定にするページの確認と同じ1通で、利用者にテスト用の Stripe 連携を頼みます（${SANDBOX_STRIPE_STEPS.replace(/ください。$/, "")}）。案内するURL: ${stripe.map((action) => action.action_url).join(" ")}`,
-      `連携の完了を待たずに、商品の作成とサイトへの組み込みを進めます。\`${CLI} test-purchase\` の前に、もう一度 \`${CLI} status --json\` で連携が済んだか（sales.can_sell）を確かめます。`,
+      `商品名・価格・限定にするページの確認と同じ1通で、利用者に売上の受け取り先のテスト登録を頼みます（${SANDBOX_STRIPE_STEPS.replace(/ください。$/, "")}）。案内するURL: ${stripe.map((action) => action.action_url).join(" ")}`,
+      `登録の完了を待たずに、商品の作成とサイトへの組み込みを進めます。\`${CLI} test-purchase\` の前に、もう一度 \`${CLI} status --json\` で登録が済んだか（sales.can_sell）を確かめます。`,
       ...(hasProduct ? [] : [`商品は \`${create}\` で作ります。`]),
     ].join("\n");
   return hasProduct ? null : create;
@@ -247,7 +251,7 @@ function userMessages(
   } else if (sales.can_sell) lines.push("すぐ販売できます。");
   if (sales.warnings.includes("payouts_disabled"))
     lines.push(
-      "販売はできますが、売上の入金が止まっています。Stripe の登録内容を確認してください。",
+      "販売はできますが、売上の入金が止まっています。売上の受け取り先の登録内容を確認してください。",
     );
   return lines;
 }
