@@ -96,7 +96,7 @@ export function assertTestPurchaseAllowed(
 }
 
 const SANDBOX_STRIPE_ACTION =
-  "Stripe の画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力する";
+  "決済サービスの画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力する";
 
 function notReady(data: unknown): CliError {
   const error = record(data) && record(data.error) ? data.error : {};
@@ -110,14 +110,14 @@ function notReady(data: unknown): CliError {
     blocker.code.startsWith("stripe_"),
   );
   const lines = [
-    "テスト用の Stripe 連携が済んでいないため、テスト購入できません。",
+    "売上の受け取り先のテスト登録が済んでいないため、テスト購入できません。",
   ];
   if (stripe.length > 0) {
     lines.push(
-      `利用者に、テスト用の Stripe 連携を頼んでください（${SANDBOX_STRIPE_ACTION}）。案内するURL: ${stripe
+      `利用者に、売上の受け取り先のテスト登録を頼んでください（${SANDBOX_STRIPE_ACTION}）。案内するURL: ${stripe
         .map((blocker) => blocker.action_url)
         .join(" ")}`,
-      `利用者が連携を終えるのを待ち、\`${CLI} status --json\` で販売できる状態（sales.can_sell）になったことを確かめてから、同じコマンドを打ち直してください。`,
+      `利用者が登録を終えるのを待ち、\`${CLI} status --json\` で販売できる状態（sales.can_sell）になったことを確かめてから、同じコマンドを打ち直してください。`,
     );
   } else
     lines.push(

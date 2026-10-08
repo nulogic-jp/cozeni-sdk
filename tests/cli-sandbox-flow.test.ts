@@ -419,7 +419,7 @@ describe("外部レビューの指摘（切り替え）", () => {
   });
 });
 
-describe("status（サンドボックスの Stripe 連携）", () => {
+describe("status（サンドボックスの売上の受け取り先の登録）", () => {
   const blocked = {
     can_sell: false,
     blockers: [
@@ -430,7 +430,7 @@ describe("status（サンドボックスの Stripe 連携）", () => {
     ],
     warnings: [],
   };
-  it("連携が未完了なら、商品の確認と同じ1通で頼み、連携を待たずに進めるよう案内する", async () => {
+  it("登録が未完了なら、商品の確認と同じ1通で頼み、登録を待たずに進めるよう案内する", async () => {
     await sandboxFirst();
     await saveCredential("sandbox");
     const t = cli(({ url }) =>
@@ -440,15 +440,20 @@ describe("status（サンドボックスの Stripe 連携）", () => {
     );
     expect((await t.run("status", "--json")).code).toBe(0);
     const data = t.parsed().data;
-    expect(data.next_step).toContain("テスト用の Stripe 連携");
+    expect(data.next_step).toContain("売上の受け取り先のテスト登録");
     expect(data.next_step).toContain("000-000");
     expect(data.next_step).toContain(`${SBX_APP}/settings/stripe`);
     expect(data.next_step).toContain("test-purchase");
     expect(data.next_step).toContain("products create");
     expect(data.message_for_user.join("\n")).toContain(
-      "テスト用の Stripe 連携",
+      "テスト用に、売上の受け取り先を登録してください。",
     );
     expect(data.message_for_user.join("\n")).not.toContain("サンドボックス");
+    // 利用者に見える文言には決済事業者名を出さない（action_url の小文字の stripe は対象外）
+    expect(data.next_step).not.toContain("Stripe");
+    expect(data.message_for_user.join("\n")).not.toContain("Stripe");
+    for (const action of data.next_actions)
+      expect(action.message).not.toContain("Stripe");
   });
   it("本番では従来の案内のまま", async () => {
     await saveCredential("production");
@@ -467,7 +472,7 @@ describe("status（サンドボックスの Stripe 連携）", () => {
     await t.run("status", "--json");
     expect(t.parsed().data.next_step).toMatch(/^npx cozeni products create/);
     expect(t.parsed().data.message_for_user.join("\n")).toContain(
-      "Stripeアカウントを接続してください。",
+      "売上の受け取り先を登録してください。",
     );
   });
 });
@@ -861,7 +866,7 @@ describe("test-purchase", () => {
       false,
     );
   });
-  it("409 creator_not_ready は blockers の案内（Stripe 連携の依頼と待ち方）を hint に出す", async () => {
+  it("409 creator_not_ready は blockers の案内（売上の受け取り先の登録の依頼と待ち方）を hint に出す", async () => {
     const t = cli(
       api({
         start: () =>
@@ -879,7 +884,10 @@ describe("test-purchase", () => {
     expect(code).toBe(4);
     const error = t.parsed().error;
     expect(error.code).toBe("creator_not_ready");
-    expect(error.hint).toContain("テスト用の Stripe 連携");
+    expect(error.hint).toContain("売上の受け取り先のテスト登録");
+    // 利用者に見える文言には決済事業者名を出さない
+    expect(error.hint).not.toContain("Stripe");
+    expect(error.message).not.toContain("Stripe");
     expect(error.hint).toContain("000-000");
     expect(error.hint).toContain(`${SBX_APP}/settings/stripe`);
     expect(error.hint).toContain("status");

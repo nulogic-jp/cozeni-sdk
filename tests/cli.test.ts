@@ -1205,7 +1205,12 @@ describe("status", () => {
             ...account,
             sales: {
               can_sell: false,
+              // API は管理画面のセットアップと同じく、受け取り先 → 販売者の情報の順で返す
               blockers: [
+                {
+                  code: "stripe_not_connected",
+                  action_url: `${APP}/settings/payouts`,
+                },
                 {
                   code: "review_rejected",
                   action_url: `${APP}/settings/review`,
@@ -1213,10 +1218,6 @@ describe("status", () => {
                     reason_code: "other",
                     note: "特商法の表記が不足",
                   },
-                },
-                {
-                  code: "stripe_not_connected",
-                  action_url: `${APP}/settings/payouts`,
                 },
               ],
               warnings: [],
@@ -1228,9 +1229,12 @@ describe("status", () => {
     const data = t.parsed().data;
     expect(data.message_for_user).toEqual([
       "販売を始めるには、次の手続きが必要です。",
-      `1. 審査で差し戻されました。指摘を直して再申請してください（理由: 特商法の表記が不足）。 ${APP}/settings/review`,
-      `2. Stripeアカウントを接続してください。 ${APP}/settings/payouts`,
+      `1. 売上の受け取り先を登録してください。 ${APP}/settings/payouts`,
+      `2. 販売者の情報の申請が差し戻されました。指摘を直して申請し直してください（理由: 特商法の表記が不足）。 ${APP}/settings/review`,
     ]);
+    // 利用者に見える文言には決済事業者名を出さない（管理画面の呼び方に揃える）
+    for (const action of data.next_actions)
+      expect(action.message).not.toContain("Stripe");
     expect(data.next_step).toBe(
       'npx cozeni products create --name "<商品名>" --price <円> --access-url "<URL>"',
     );

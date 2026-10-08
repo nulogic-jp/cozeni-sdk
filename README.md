@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.6.4 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.6.5 init --creator <クリエイターID>
 ```
 
 `--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
@@ -62,7 +62,7 @@ Cozeniの管理画面（**設定 → 開発者**）の導入プロンプトは�
 2. 購入権ができるまで、`login --complete` と同じ間隔（5秒）で打ち直し、最長90秒待ちます。間に合わなければ終了コード6（`authorization_pending`）で、同じコマンドを打ち直します（処理中の決済があれば新たに決済しません）。
 3. サーバーが返すワンタイムコードは**出力しません**。商品の限定ページ（`access_url` のパス）を `--site-origin` 上で `?cozeni_code=` 付きで要求し、303で戻ったページへ Cookie を付けて入れること、続けて Cookie なしで同じページを要求して Cozeni の入場画面（`enter_url`）へ送られることを確かめます。
 4. 確かめたら返金します。入場の確認に失敗したときは返金せず（`entry_check_failed`、終了コード4）、直して打ち直せば、既存の購入権を確かめてから返金します。
-5. Stripe の連携が済んでいないとき（409 `creator_not_ready`）は、`error.hint` に連携の依頼と待ち方を示します。
+5. 売上の受け取り先の登録が済んでいないとき（409 `creator_not_ready`）は、`error.hint` に登録の依頼と待ち方を示します。
 
 ```json
 {"ok":true,"data":{"profile":"sandbox","product_id":"prd_…","site_origin":"http://localhost:3000","entered":true,"redirected_when_unpurchased":true,"refunded":true,"refund_count":1,"next_step":"利用者への1通の案内（AIへの指示）"}}
