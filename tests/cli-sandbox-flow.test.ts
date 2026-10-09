@@ -450,7 +450,9 @@ describe("status（サンドボックスの売上の受け取り先の登録）"
     ]) {
       expect(text).not.toContain("テストデータを使う");
       expect(text).toContain("「テストアカウントを使用する」");
-      expect(text).toContain("「シミュレーション」→「確認成功」");
+      expect(text).toContain(
+        "「シミュレーション」→「確認成功」→「結果を送信する」",
+      );
       expect(text).toContain(
         "導入プロンプトの「売上の受け取り先のテスト登録」",
       );
@@ -904,7 +906,9 @@ describe("test-purchase", () => {
     expect(error.hint).toContain("000-000");
     expect(error.hint).not.toContain("テストデータを使う");
     expect(error.hint).toContain("「テストアカウントを使用する」");
-    expect(error.hint).toContain("「シミュレーション」→「確認成功」");
+    expect(error.hint).toContain(
+      "「シミュレーション」→「確認成功」→「結果を送信する」",
+    );
     expect(error.hint).toContain(
       "導入プロンプトの「売上の受け取り先のテスト登録」",
     );
@@ -1253,7 +1257,9 @@ describe("skill の版", () => {
     );
     expect(skill).not.toContain("テストデータを使う");
     expect(skill).toContain("「テストアカウントを使用する」");
-    expect(skill).toContain("「シミュレーション」→「確認成功」");
+    expect(skill).toContain(
+      "「シミュレーション」→「確認成功」→「結果を送信する」",
+    );
     expect(skill).toContain("`000-000`");
     expect(skill).toContain("導入プロンプトの「売上の受け取り先のテスト登録」");
   });
