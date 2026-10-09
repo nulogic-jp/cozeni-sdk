@@ -123,11 +123,17 @@ const blockerMessages: Record<SalesBlocker["code"], string> = {
     "売上の受け取り先の確認が終わるのを待ってください。",
 };
 
-// サンドボックスでは、売上の受け取り先（Stripe）の登録は本番と同じ画面でテストデータを使って行う（V-21）。
+// サンドボックスでは、売上の受け取り先（Stripe）の登録は本番と同じ画面でテスト用の値を入れて行う（V-21）。
+// 画面全体の「テストデータを使う」ボタンは無く、テスト用のボタンは銀行口座と本人確認の画面ごとにある（V-29 の実測）。
+// 名前・住所などそのほかの入力値は導入プロンプトの「売上の受け取り先のテスト登録」に書いてあるので、ここでは複製せず参照する（V-29）。
 // 名前の「サンドボックス」は登録をお願いするときに1回だけ出し、以後は「テスト」と呼ぶ（V-25）。
 // 利用者には決済事業者名を出さず、管理画面と同じ「売上の受け取り先」と呼ぶ。
-const SANDBOX_STRIPE_STEPS =
-  "決済サービスの画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力してください。";
+const SANDBOX_STRIPE_SCREEN =
+  "決済サービスの画面では、銀行口座は「テストアカウントを使用する」、本人確認は「シミュレーション」→「確認成功」→「結果を送信する」を使い、SMS のコードを聞かれたら 000-000 を入力";
+/** 利用者に見せる手順（message_for_user・next_actions）。 */
+const SANDBOX_STRIPE_STEPS = `${SANDBOX_STRIPE_SCREEN}してください。そのほかの入力値は、導入プロンプトの「売上の受け取り先のテスト登録」に従ってください。`;
+/** AI への指示（next_step・error.hint）の丸かっこ内に入れる、利用者への頼み方。 */
+export const SANDBOX_STRIPE_REQUEST = `${SANDBOX_STRIPE_SCREEN}する。そのほかの入力値は、導入プロンプトの「売上の受け取り先のテスト登録」の値を伝える`;
 const sandboxBlockerMessages: Partial<Record<SalesBlocker["code"], string>> = {
   stripe_not_connected: `テスト用に、売上の受け取り先を登録してください。${SANDBOX_STRIPE_STEPS}`,
   stripe_onboarding_incomplete: `テスト用の売上の受け取り先の登録が途中です。続きから入力してください。${SANDBOX_STRIPE_STEPS}`,
@@ -217,7 +223,7 @@ function statusNextStep(
   );
   if (sandbox && stripe.length > 0)
     return [
-      `商品名・価格・限定にするページの確認と同じ1通で、利用者に売上の受け取り先のテスト登録を頼みます（${SANDBOX_STRIPE_STEPS.replace(/ください。$/, "")}）。案内するURL: ${stripe.map((action) => action.action_url).join(" ")}`,
+      `商品名・価格・限定にするページの確認と同じ1通で、利用者に売上の受け取り先のテスト登録を頼みます（${SANDBOX_STRIPE_REQUEST}）。案内するURL: ${stripe.map((action) => action.action_url).join(" ")}`,
       `登録の完了を待たずに、商品の作成とサイトへの組み込みを進めます。\`${CLI} test-purchase\` の前に、もう一度 \`${CLI} status --json\` で登録が済んだか（sales.can_sell）を確かめます。`,
       ...(hasProduct ? [] : [`商品は \`${create}\` で作ります。`]),
     ].join("\n");
