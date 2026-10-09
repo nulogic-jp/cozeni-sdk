@@ -15,7 +15,12 @@ import {
   type Profile,
   type Session,
 } from "./api.js";
-import { type CommandContext, call, type Output } from "./commands.js";
+import {
+  type CommandContext,
+  call,
+  type Output,
+  SANDBOX_STRIPE_REQUEST,
+} from "./commands.js";
 import { CliError } from "./errors.js";
 import { CLI } from "./invocation.js";
 import { COMPLETE_WAIT_MS, DEFAULT_POLL_INTERVAL_MS } from "./login.js";
@@ -95,9 +100,6 @@ export function assertTestPurchaseAllowed(
   return { productId, site };
 }
 
-const SANDBOX_STRIPE_ACTION =
-  "決済サービスの画面で「テストデータを使う」を押し、SMS のコードに 000-000 を入力する";
-
 function notReady(data: unknown): CliError {
   const error = record(data) && record(data.error) ? data.error : {};
   const blockers = (Array.isArray(error.blockers) ? error.blockers : [])
@@ -114,7 +116,7 @@ function notReady(data: unknown): CliError {
   ];
   if (stripe.length > 0) {
     lines.push(
-      `利用者に、売上の受け取り先のテスト登録を頼んでください（${SANDBOX_STRIPE_ACTION}）。案内するURL: ${stripe
+      `利用者に、売上の受け取り先のテスト登録を頼んでください（${SANDBOX_STRIPE_REQUEST}）。案内するURL: ${stripe
         .map((blocker) => blocker.action_url)
         .join(" ")}`,
       `利用者が登録を終えるのを待ち、\`${CLI} status --json\` で販売できる状態（sales.can_sell）になったことを確かめてから、同じコマンドを打ち直してください。`,

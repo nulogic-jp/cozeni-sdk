@@ -442,6 +442,19 @@ describe("status（サンドボックスの売上の受け取り先の登録）"
     const data = t.parsed().data;
     expect(data.next_step).toContain("売上の受け取り先のテスト登録");
     expect(data.next_step).toContain("000-000");
+    // 画面全体の「テストデータを使う」ボタンは無い。画面ごとのテスト用の操作を案内し、ほかの値は導入プロンプトに従う（V-29）
+    for (const text of [
+      data.next_step,
+      data.message_for_user.join("\n"),
+      ...data.next_actions.map((action: { message: string }) => action.message),
+    ]) {
+      expect(text).not.toContain("テストデータを使う");
+      expect(text).toContain("「テストアカウントを使用する」");
+      expect(text).toContain("「シミュレーション」→「確認成功」");
+      expect(text).toContain(
+        "導入プロンプトの「売上の受け取り先のテスト登録」",
+      );
+    }
     expect(data.next_step).toContain(`${SBX_APP}/settings/stripe`);
     expect(data.next_step).toContain("test-purchase");
     expect(data.next_step).toContain("products create");
@@ -889,6 +902,12 @@ describe("test-purchase", () => {
     expect(error.hint).not.toContain("Stripe");
     expect(error.message).not.toContain("Stripe");
     expect(error.hint).toContain("000-000");
+    expect(error.hint).not.toContain("テストデータを使う");
+    expect(error.hint).toContain("「テストアカウントを使用する」");
+    expect(error.hint).toContain("「シミュレーション」→「確認成功」");
+    expect(error.hint).toContain(
+      "導入プロンプトの「売上の受け取り先のテスト登録」",
+    );
     expect(error.hint).toContain(`${SBX_APP}/settings/stripe`);
     expect(error.hint).toContain("status");
     expect(t.calls.some((call) => call.url.startsWith(SITE))).toBe(false);
@@ -1226,5 +1245,16 @@ describe("skill の版", () => {
     expect(satisfies(version, skillRange(skill) ?? "")).toBe(true);
     expect(skill).toContain("test-purchase");
     expect(skill).toContain("switch");
+  });
+  it("売上の受け取り先のテスト登録は、画面ごとのテスト用の操作と導入プロンプトの値で案内する（V-29）", async () => {
+    const skill = await readFile(
+      new URL("../skills/cozeni-setup/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    expect(skill).not.toContain("テストデータを使う");
+    expect(skill).toContain("「テストアカウントを使用する」");
+    expect(skill).toContain("「シミュレーション」→「確認成功」");
+    expect(skill).toContain("`000-000`");
+    expect(skill).toContain("導入プロンプトの「売上の受け取り先のテスト登録」");
   });
 });
