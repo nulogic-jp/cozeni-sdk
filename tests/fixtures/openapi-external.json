@@ -22,7 +22,7 @@
       "CreatorApiKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "管理画面から発行したクリエイターAPIキー。購入者認証には使わない。"
+        "description": "管理画面または CLI の `cozeni login` で発行したクリエイターAPIキー。購入者認証には使わない。"
       }
     },
     "schemas": {
@@ -142,6 +142,111 @@
           }
         },
         "required": ["product_id"],
+        "additionalProperties": false
+      },
+      "ExternalPortalLink": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": ["url"]
+      },
+      "ExternalCliDeviceCode": {
+        "type": "object",
+        "properties": {
+          "device_code": {
+            "type": "string"
+          },
+          "user_code": {
+            "type": "string",
+            "description": "`XXXX-XXXX` 形式。"
+          },
+          "verification_uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "verification_uri_complete": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expires_in": {
+            "type": "integer"
+          },
+          "interval": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_code",
+          "user_code",
+          "verification_uri",
+          "verification_uri_complete",
+          "expires_in",
+          "interval"
+        ],
+        "additionalProperties": false
+      },
+      "ExternalCliDeviceCodeInput": {
+        "type": "object",
+        "properties": {
+          "cli_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "client_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "CLIが判定した実行元（例: Claude Code・Cursor・terminal）。承認画面に表示する。"
+          }
+        },
+        "required": ["cli_version", "client_name"],
+        "additionalProperties": false
+      },
+      "ExternalCliToken": {
+        "type": "object",
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "description": "平文のキー。この応答でしか受け取れない。"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "creator_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "api_key",
+          "key_id",
+          "creator_id",
+          "environment",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "ExternalCliTokenInput": {
+        "type": "object",
+        "properties": {
+          "device_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": ["device_code"],
         "additionalProperties": false
       },
       "ExternalAccount": {
@@ -306,6 +411,16 @@
           "access_url": {
             "type": "string"
           },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExternalProductImage"
+            }
+          },
           "status": {
             "type": "string",
             "enum": ["active", "archived"]
@@ -325,10 +440,32 @@
           "price_jpy",
           "currency",
           "access_url",
+          "description",
+          "images",
           "status",
           "created_at",
           "updated_at"
         ],
+        "additionalProperties": false
+      },
+      "ExternalProductImage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          }
+        },
+        "required": ["id", "url", "content_type", "size_bytes"],
         "additionalProperties": false
       },
       "ExternalCreateProduct": {
@@ -347,6 +484,11 @@
           "access_url": {
             "type": "string",
             "format": "uri"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Markdown。前後の空白を除いたコードポイント数で4000字まで。null・空白だけなら説明なし。"
           }
         },
         "required": ["name", "price_jpy", "access_url"],
@@ -368,9 +510,25 @@
           "access_url": {
             "type": "string",
             "format": "uri"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Markdown。前後の空白を除いたコードポイント数で4000字まで。null・空白だけなら説明なし。"
           }
         },
         "additionalProperties": false
+      },
+      "ExternalProductImageUpload": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "JPEG・PNG・WebP、5MBまで。"
+          }
+        },
+        "required": ["file"]
       },
       "ExternalCheckoutLink": {
         "type": "object",
@@ -390,6 +548,78 @@
           }
         },
         "required": ["id", "product_id", "url", "disabled"],
+        "additionalProperties": false
+      },
+      "ExternalTestPurchaseCompleted": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["completed"]
+          },
+          "handoff_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_in": {
+            "type": "integer"
+          }
+        },
+        "required": ["status", "handoff_code", "expires_in"],
+        "additionalProperties": false
+      },
+      "ExternalTestPurchasePending": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["pending"]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": false
+      },
+      "ExternalSalesBlockedError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": ["creator_not_ready"]
+              },
+              "message": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "blockers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ExternalSalesBlocker"
+                }
+              }
+            },
+            "required": ["code", "message", "request_id", "blockers"]
+          }
+        },
+        "required": ["error"]
+      },
+      "ExternalTestPurchaseRefund": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["refunded", "nothing_to_refund"]
+          },
+          "refund_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["status", "refund_count"],
         "additionalProperties": false
       }
     },
@@ -504,6 +734,233 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ExternalUnavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customer/portal-link": {
+      "post": {
+        "operationId": "externalCreatePortalLink",
+        "tags": ["購入者"],
+        "security": [
+          {
+            "CustomerCookie": []
+          }
+        ],
+        "summary": "購入者ポータルを開く1回限り・60秒のURLを発行する",
+        "responses": {
+          "200": {
+            "description": "購入者ポータルのURL（1回限り・60秒）。押された瞬間に発行してリダイレクトする。失効したURLはメール入力（OTP）の入場に落ちる。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalPortalLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no_session。購入者JWTがない・署名不正・期限切れ・epoch不一致（全端末ログアウト後）・購入者が存在しない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。発行できなかった。時間をおいて再試行する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cli/device-codes": {
+      "post": {
+        "operationId": "externalCreateCliDeviceCode",
+        "tags": ["CLI"],
+        "security": [],
+        "summary": "CLIのログインを始め、承認用のコードを発行する",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalCliDeviceCodeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "device_code はCLIだけが持ち、user_code と承認URLを利用者に示す。期限は expires_in 秒。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCliDeviceCode"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cli/tokens": {
+      "post": {
+        "operationId": "externalCreateCliToken",
+        "tags": ["CLI"],
+        "security": [],
+        "summary": "承認を確かめ、承認済みならCLI用のAPIキーを発行する",
+        "description": "RFC 8628 §3.5 のエラー名を error.code に返す。キーは成功した1回の応答にだけ載り、再取得できない。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalCliTokenInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "承認済み。期限30日・導入用の4スコープのキー。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCliToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "authorization_pending（承認前）/ slow_down（間隔が5秒未満）/ access_denied（拒否）/ expired_token（期限切れ・消費済み・不明なコード）/ invalid_input。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cli/logout": {
+      "post": {
+        "operationId": "externalCliLogout",
+        "tags": ["CLI"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "summary": "CLIで発行したキーを失効する",
+        "description": "Authorization のキーが `cozeni login` で発行したものなら失効する。管理画面で発行したキー・失効済み・期限切れ・不明なキーでも 204 を返し、何もしない。",
+        "responses": {
+          "204": {
+            "description": "失効した、または対象外で何もしなかった。"
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
                 }
               }
             }
@@ -1146,6 +1603,282 @@
         }
       }
     },
+    "/products/{product_id}/image": {
+      "put": {
+        "operationId": "externalPutProductImage",
+        "tags": ["商品"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: products:write。multipart/form-data の file 欄に画像を1枚送る。形式は中身で判定し、申告された Content-Type は見ない。既存の画像は差し替える（URL が変わる）。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalProductImageUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "公開商品情報。リンクは別APIで取得する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalProduct"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "image_too_large。5MB（5,242,880 バイト）を超える。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_image_type。JPEG・PNG・WebP 以外（中身で判定する）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "externalDeleteProductImage",
+        "tags": ["商品"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "必要なスコープ: products:write。画像が無くても200を返す。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "公開商品情報。リンクは別APIで取得する。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalProduct"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found / checkout_link_not_found。他人の商品も404。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict / product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/products/{product_id}/checkout-link": {
       "get": {
         "operationId": "externalGetCheckoutLink",
@@ -1381,6 +2114,298 @@
           },
           "500": {
             "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products/{product_id}/test-purchase": {
+      "post": {
+        "operationId": "externalStartTestPurchase",
+        "tags": ["テスト購入"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "サンドボックス専用（それ以外は404）。必要なスコープ: products:write。本文なし。購入者はキーの所有者本人（ログイン用メールアドレス）で、リクエストでは指定できない。購入権が無ければテストカードで決済を確定して202（pending）。注文・購入権は本番と同じWebhookでできるため、購入権ができるまで同じ要求を打ち直す。処理中の決済があれば新たに決済しない。購入権が既にあれば決済せず200（completed）と、OTPなしで発行するワンタイムコード（handoff_code。K-1。有効60秒・1回きり）を返す。コードはログ・出力に出さない。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "購入権がある。入場の確認用のワンタイムコードを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalTestPurchaseCompleted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "決済は済んだ（または処理中）。Webhook による購入権の付与を待つ。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalTestPurchasePending"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found（サンドボックス以外）/ product_not_found（他人の商品・存在しない商品）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "creator_not_ready（売上の受け取り先が未登録・販売者の情報が未承認など。blockers は GET /account の sales.blockers と同じ）/ product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ExternalSalesBlockedError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ExternalError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe_error。Stripe の処理に失敗した。打ち直せる。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products/{product_id}/test-purchase/refund": {
+      "post": {
+        "operationId": "externalRefundTestPurchase",
+        "tags": ["テスト購入"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "description": "サンドボックス専用（それ以外は404）。必要なスコープ: products:write。本文なし。キーの所有者本人が購入者の、その商品の成立済みの注文をすべて返金する。購入権の失効は返金のWebhookの経路で行う（この要求ではDBを書かない）。対象が無ければ200（nothing_to_refund）で、打ち直しても失敗しない。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "product_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "返金を依頼した（refunded）、または対象が無い（nothing_to_refund）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalTestPurchaseRefund"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。未知フィールド、無効なcursor・入力を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found（サンドボックス以外）/ product_not_found（他人の商品・存在しない商品）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "creator_not_ready（売上の受け取り先が未登録・販売者の情報が未承認など。blockers は GET /account の sales.blockers と同じ）/ product_archived / checkout_link_disabled。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ExternalSalesBlockedError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ExternalError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe_error。Stripe の処理に失敗した。打ち直せる。",
             "content": {
               "application/json": {
                 "schema": {

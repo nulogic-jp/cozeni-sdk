@@ -32,7 +32,8 @@
   "create_product": {
     "name": "配色ハンドブック",
     "price_jpy": 3000,
-    "access_url": "https://creator.example/members"
+    "access_url": "https://creator.example/members",
+    "description": "## 内容\n\n- 全40ページのPDF\n- 配色の実例120点"
   },
   "product": {
     "id": "prd_0123456789abcdef0123456789abcdef",
@@ -40,6 +41,15 @@
     "price_jpy": 3000,
     "currency": "jpy",
     "access_url": "https://creator.example/members",
+    "description": "## 内容\n\n- 全40ページのPDF\n- 配色の実例120点",
+    "images": [
+      {
+        "id": "fil_0123456789abcdef0123456789abcdef",
+        "url": "https://api.cozeni.net/v1/product-images/fil_0123456789abcdef0123456789abcdef",
+        "content_type": "image/png",
+        "size_bytes": 482133
+      }
+    ],
     "status": "active",
     "created_at": "2026-09-16T00:00:00.000Z",
     "updated_at": "2026-09-16T00:00:00.000Z"
@@ -118,5 +128,102 @@
   },
   "entitlement_input": {
     "product_id": "prd_0123456789abcdef0123456789abcdef"
+  },
+  "portal_link": {
+    "url": "https://checkout.example/portal/cre_example?cozeni_portal_code=0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "portal_link_errors": [
+    {
+      "status": 401,
+      "body": {
+        "error": {
+          "code": "no_session",
+          "message": "購入者のセッションがないか、無効です。",
+          "request_id": "req_example"
+        }
+      }
+    },
+    {
+      "status": 503,
+      "body": {
+        "error": {
+          "code": "unavailable",
+          "message": "一時的に利用できません。",
+          "request_id": "req_example"
+        }
+      }
+    }
+  ],
+  "cli_device_code_input": {
+    "cli_version": "0.4.0",
+    "client_name": "Claude Code"
+  },
+  "cli_device_code": {
+    "device_code": "fixture-only-not-a-valid-device-code-000000",
+    "user_code": "BCDF-GHJK",
+    "verification_uri": "https://cozeni.net/device",
+    "verification_uri_complete": "https://cozeni.net/device?code=BCDF-GHJK",
+    "expires_in": 600,
+    "interval": 5
+  },
+  "cli_token_input": {
+    "device_code": "fixture-only-not-a-valid-device-code-000000"
+  },
+  "cli_token": {
+    "api_key": "fixture-only-not-a-valid-key",
+    "key_id": "key_example",
+    "creator_id": "cre_example",
+    "environment": "production",
+    "expires_at": "2026-10-25T00:00:00.000Z"
+  },
+  "cli_token_errors": [
+    {
+      "error": {
+        "code": "authorization_pending",
+        "message": "fixture",
+        "request_id": "req_example"
+      }
+    },
+    {
+      "error": {
+        "code": "slow_down",
+        "message": "fixture",
+        "request_id": "req_example"
+      }
+    },
+    {
+      "error": {
+        "code": "access_denied",
+        "message": "fixture",
+        "request_id": "req_example"
+      }
+    },
+    {
+      "error": {
+        "code": "expired_token",
+        "message": "fixture",
+        "request_id": "req_example"
+      }
+    }
+  ],
+  "test_purchase_completed": {
+    "status": "completed",
+    "handoff_code": "fixture-only-not-a-valid-handoff-code-0000000000000000000000000000",
+    "expires_in": 60
+  },
+  "test_purchase_pending": { "status": "pending" },
+  "test_purchase_refund": { "status": "refunded", "refund_count": 1 },
+  "test_purchase_not_ready": {
+    "error": {
+      "code": "creator_not_ready",
+      "message": "fixture",
+      "request_id": "req_example",
+      "blockers": [
+        {
+          "code": "stripe_not_connected",
+          "action_url": "https://sandbox.cozeni.net/settings/onboarding"
+        }
+      ]
+    }
   }
 }

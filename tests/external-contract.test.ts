@@ -261,6 +261,19 @@ const managementCases = [
     call: (client: Management) => client.checkoutLinks.ensure(product.id),
   },
 ];
+// 契約にあるが、このファイルでは検証しない操作。契約に操作が増えたら、
+// ここに理由付きで足すか、上のケースで検証するまで一覧の一致検査が落ちる。
+const uncoveredOperations = [
+  // CLIのログイン・ログアウト・テスト購入。CLIのテストが独自のモックで検証している。
+  "externalCreateCliDeviceCode",
+  "externalCreateCliToken",
+  "externalCliLogout",
+  "externalStartTestPurchase",
+  "externalRefundTestPurchase",
+  // 商品画像。SDKに対応する公開APIがない。
+  "externalPutProductImage",
+  "externalDeleteProductImage",
+];
 describe("正式外部v1契約とSDK", () => {
   it("JSONと型検査用fixtureが一致し、公開型が導入者に返る", () => {
     expect(fixture).toEqual(official);
@@ -279,6 +292,9 @@ describe("正式外部v1契約とSDK", () => {
     expectTypeOf<
       ReturnType<ReturnType<typeof createCustomerClient>["checkEntitlement"]>
     >().toEqualTypeOf<Promise<Entitlement>>();
+    expectTypeOf<
+      ReturnType<ReturnType<typeof createCustomerClient>["createPortalLink"]>
+    >().toEqualTypeOf<Promise<{ url: string }>>();
     expect(
       specification.components.securitySchemes.CreatorApiKey,
     ).toMatchObject({ type: "http", scheme: "bearer" });
@@ -290,6 +306,8 @@ describe("正式外部v1契約とSDK", () => {
         ...managementCases.map((item) => item.id),
         "externalExchangeHandoff",
         "externalCheckEntitlements",
+        "externalCreatePortalLink",
+        ...uncoveredOperations,
       ].sort(),
     );
   });
@@ -423,6 +441,58 @@ describe("正式外部v1契約とSDK", () => {
       );
     }
   });
+  it("ポータルのリンク発行は購入者Cookieだけで認証し、本文を送らず200/401/503を返す", () => {
+    const operation = operationById("externalCreatePortalLink");
+    expect(operation.method).toBe("POST");
+    expect(operation.path).toBe("/customer/portal-link");
+    expect(operation.security).toEqual([{ CustomerCookie: [] }]);
+    expect(operation.requestBody).toBeUndefined();
+    expect(Object.keys(operation.responses).sort()).toEqual([
+      "200",
+      "401",
+      "503",
+    ]);
+    // 下のエラーのケースが正本の401 no_session・503 unavailableを網羅していること。
+    expect(
+      fixture.portal_link_errors.map(({ status, body }) => [
+        status,
+        body.error.code,
+      ]),
+    ).toEqual([
+      [401, "no_session"],
+      [503, "unavailable"],
+    ]);
+  });
+  it("実fixtureのポータルURLを構造検証に通して返す", async () => {
+    const fetch = contractFetch(
+      "externalCreatePortalLink",
+      200,
+      fixture.portal_link,
+    );
+    expect(
+      await createCustomerClient({ apiOrigin, fetch }).createPortalLink({
+        cookieHeader: `unrelated=discard; ${customerCookie}`,
+        creatorId: fixture.account.creator_id,
+      }),
+    ).toEqual(fixture.portal_link);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([...fixture.portal_link_errors])(
+    "ポータルのリンク発行HTTP $status / $body.error.code は構造化エラーで返す",
+    async ({ status, body }) => {
+      const fetch = contractFetch("externalCreatePortalLink", status, body);
+      const result = createCustomerClient({
+        apiOrigin,
+        fetch,
+      }).createPortalLink({ cookieHeader: customerCookie });
+      await expect(result).rejects.toBeInstanceOf(CozeniError);
+      await expect(result).rejects.toMatchObject({
+        status,
+        code: body.error.code,
+        requestId: body.error.request_id,
+      });
+    },
+  );
   it.each([400, 503])(
     "コード交換HTTP %sではAPIエラーの契約を維持する",
     async (status) => {
