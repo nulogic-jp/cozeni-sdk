@@ -387,6 +387,18 @@ describe("購入者ポータルへのリンク（createPortalLink）", () => {
       client.createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" }),
     ).rejects.toMatchObject({ code: "no_session", status: 401 });
   });
+  it.each([403, 500, 503])(
+    "401以外（%s）の本文がno_sessionでもno_sessionにしない（状態と理由を組で確かめる）",
+    async (status) => {
+      const client = createCustomerClient({
+        apiOrigin,
+        fetch: vi.fn().mockResolvedValue(ok(errorBody("no_session"), status)),
+      });
+      await expect(
+        client.createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" }),
+      ).rejects.toMatchObject({ code: "invalid_response", status });
+    },
+  );
   it("503はunavailableとして投げる", async () => {
     const client = createCustomerClient({
       apiOrigin,

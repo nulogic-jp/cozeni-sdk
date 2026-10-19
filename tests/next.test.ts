@@ -376,6 +376,7 @@ describe("portalRedirect(creatorId)", () => {
   });
   it.each([
     ["503", () => error("unavailable", 503)],
+    ["本文がno_sessionの503（契約外）", () => error("no_session", 503)],
     [
       "通信失敗",
       () => {

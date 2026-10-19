@@ -283,7 +283,13 @@ export function createCustomerClient(options: ClientOptions) {
         undefined,
         { Cookie: `cozeni_customer=${token}` },
       );
-      if (response.status !== 200) throw failure(response, data);
+      if (response.status !== 200) {
+        const error = failure(response, data);
+        // no_sessionは401との組でだけ認める（契約外の状態を未入場として扱わない）。
+        if (error.code === "no_session" && response.status !== 401)
+          throw new CozeniError("invalid_response", response.status);
+        throw error;
+      }
       const url = record(data)
         ? validPortalUrl(data.url, {
             origin: checkoutOrigin,

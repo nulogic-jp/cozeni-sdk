@@ -22,7 +22,7 @@ export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://cozeni.net";
 export const SANDBOX_API_ORIGIN = "https://api-sandbox.cozeni.net";
 export const SANDBOX_APP_ORIGIN = "https://sandbox.cozeni.net";
-// 購入者面（checkout・enter・portal）。管理画面とは別のサブドメインに置かれる（本体 docs N-2）。
+// 購入者面（checkout・enter・portal）。管理画面とは別のサブドメインに置かれる。
 // 値はSDK本体（購入者ポータルのURLの照合）と共有する。
 export const PRODUCTION_CHECKOUT_ORIGIN = CHECKOUT_ORIGINS.production;
 export const SANDBOX_CHECKOUT_ORIGIN = CHECKOUT_ORIGINS.sandbox;
