@@ -1,6 +1,7 @@
 // Next.js App Router専用のサブパスexport（@nulogic/cozeni-sdk/next）。Next.js 15・16に対応する。
 // ハンドオフ（cozeni_codeの交換とコード除去）をproxy / middlewareで、購入者の認可と
-// enter_urlへの自動リダイレクト、無限リダイレクトの停止条件をpageの入口で行う。
+// enter_urlへの自動リダイレクト、無限リダイレクトの停止条件をpageの入口で、
+// 購入者ポータルへの送り出しをRoute Handlerで行う。
 // 共通SDK本体（./index.ts）はフレームワーク非依存のまま維持し、
 // Next.js固有の処理（cookies() / redirect() / NextResponse）はここに閉じ込める。
 import "server-only";
@@ -16,7 +17,11 @@ import {
   enterRedirectUrl,
   trustedSiteUrl,
 } from "./index.js";
-import { API_ORIGINS, resolveApiOrigin } from "./transport.js";
+import {
+  API_ORIGINS,
+  knownCheckoutOrigin,
+  resolveApiOrigin,
+} from "./transport.js";
 
 // このモジュールはNext.jsのバンドラ（webpack/turbopack）を通してのみ動作する。
 // "next/headers" / "next/navigation" はNext.js本体がpackage.jsonにexportsを
@@ -386,4 +391,92 @@ export function denialResponse(
       "Referrer-Policy": "no-referrer",
     },
   });
+}
+
+const PORTAL_INVALID_RESPONSE =
+  "[cozeni] 購入者ポータルへのリンクの応答を確認できませんでした。portalRedirect() に渡したクリエイターIDと、接続先の環境（COZENI_ENVIRONMENT）が合っているかを確認してください。";
+
+/**
+ * 購入者ポータル（Cozeniの `/portal/{creatorId}`）へ送るRoute Handler用。
+ * 「購入した商品」などのボタンの遷移先（例: `app/portal/route.ts` の `GET`）で呼び、
+ * 返したResponseをそのまま返す。押されたときにリンクを発行して302で送る。
+ *
+ * ```ts
+ * export function GET() {
+ *   return portalRedirect("cre_...");
+ * }
+ * ```
+ *
+ * - 発行できたら、そのURL（60秒・1回限りのコード付き）へ302。ページの描画時に発行して
+ *   `<a href>` に埋め込まないこと（60秒で切れる）。ボタンは `<Link>` ではなく `<a>` にする
+ *   （`<Link>` のprefetchで、押す前に発行されないように）
+ * - 購入者がこのサイトで入場していない（Cookieが無い・期限切れなど）ときは、
+ *   コード無しのその販売者のポータルへ302で送る。Cozeniのポータルは、Cozeni側の
+ *   セッションがあれば一覧を出し、無ければ確認コードでの入場へ進める。
+ *   接続先を `COZENI_API_ORIGIN` で独自に指定しているときは購入者面のオリジンが
+ *   分からないため、リダイレクトせず401を返す
+ * - 発行できない（503・通信失敗・応答の検証失敗）ときは503。障害を再入場の要求に変えない。
+ *   応答が契約に合わない（URLの販売者・オリジンが違うなど）ときは、クリエイターIDと接続先の確認を促す固定文をログに出す
+ * - 遷移先はAPIの応答と引数の `creatorId` だけで決め、リクエストのクエリからは受け取らない
+ * - URLとコードはログに出さない
+ *
+ * `creatorId` はクリエイターID（`npx cozeni whoami --json` の `data.creator_id`。秘密ではない）。
+ * サンドボックスと本番で値が違う。
+ */
+export async function portalRedirect(
+  creatorId: string,
+  options: Pick<ClientOptions, "fetch" | "timeoutMs"> = {},
+): Promise<Response> {
+  const api = apiOrigin();
+  if (!api) return misconfigured();
+  let token: string | undefined;
+  try {
+    token = (await cookies()).get("cozeni_customer")?.value;
+  } catch {
+    // Cookieを読めない場合は未入場として扱う。
+  }
+  try {
+    const { url } = await createCustomerClient({
+      apiOrigin: api,
+      fetch: options.fetch,
+      timeoutMs: options.timeoutMs ?? 5000,
+    }).createPortalLink({
+      creatorId,
+      cookieHeader: token ? `cozeni_customer=${token}` : undefined,
+    });
+    return new Response(null, {
+      status: 302,
+      headers: { ...privateHeaders, Location: url },
+    });
+  } catch (error) {
+    const code = error instanceof CozeniError ? error.code : undefined;
+    if (code === "invalid_input") {
+      console.error(
+        "[cozeni] portalRedirect() に渡したクリエイターID（cre_…）を確認してください。",
+      );
+      return misconfigured();
+    }
+    if (code === "no_session") {
+      const checkout = knownCheckoutOrigin(api);
+      if (checkout)
+        return new Response(null, {
+          status: 302,
+          headers: {
+            ...privateHeaders,
+            Location: `${checkout}/portal/${encodeURIComponent(creatorId)}`,
+          },
+        });
+      return new Response("購入者として確認できませんでした。", {
+        status: 401,
+        headers: privateHeaders,
+      });
+    }
+    // 応答が契約に合わない（多くは返ったURLの販売者・オリジンが合わない＝別の環境や別の販売者の
+    // クリエイターIDを書いている）。原因を追えるよう固定文だけを出し、URL・コード・IDの値は出さない。
+    if (code === "invalid_response") console.error(PORTAL_INVALID_RESPONSE);
+    return new Response(
+      "購入した商品のページを開けませんでした。時間をおいてもう一度お試しください。",
+      { status: 503, headers: privateHeaders },
+    );
+  }
 }

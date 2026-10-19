@@ -23,8 +23,9 @@ vi.mock("next/navigation", () => ({ redirect: redirectMock }));
 import { GET as dataRoute } from "../app/api/protected/route";
 import { protectedAction } from "../app/members/actions";
 import Members from "../app/members/page";
+import { GET as portalRoute } from "../app/portal/route";
 import { PROTECTED_CONTENT } from "../lib/content";
-import { PRODUCT_ID } from "../lib/cozeni";
+import { CREATOR_ID, PRODUCT_ID } from "../lib/cozeni";
 import nextConfig from "../next.config";
 import { config, proxy } from "../proxy";
 
@@ -120,6 +121,36 @@ describe("enter_urlへのリダイレクトと停止条件", () => {
       reason: "no_session",
     });
     expect(redirectMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("購入者ポータルへのボタン", () => {
+  const portal = `https://checkout.cozeni.net/portal/${CREATOR_ID}`;
+  it("押されたときに発行したリンクへ302で送る", async () => {
+    const url = `${portal}?cozeni_portal_code=${"c3".repeat(32)}`;
+    api({ url });
+    const response = await portalRoute();
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(url);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+  });
+  it("このサイトで入場していなければ、コード無しのポータルへ送る", async () => {
+    api(
+      { error: { code: "no_session", message: "x", request_id: "req_1" } },
+      401,
+    );
+    const response = await portalRoute();
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(portal);
+  });
+  it("発行できなければ503で、どこへも送らない", async () => {
+    api(
+      { error: { code: "unavailable", message: "x", request_id: "req_1" } },
+      503,
+    );
+    const response = await portalRoute();
+    expect(response.status).toBe(503);
+    expect(response.headers.has("location")).toBe(false);
   });
 });
 

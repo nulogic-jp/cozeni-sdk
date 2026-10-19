@@ -23,6 +23,7 @@ import {
   cozeniProxy,
   entitlement,
   handleCozeniHandoff,
+  portalRedirect,
   requireEntitlement,
 } from "../src/next.js";
 
@@ -286,6 +287,155 @@ describe("requireEntitlement(productId)", () => {
       haltRedirect: true,
     }).catch((e) => e);
     expect(halted).toBeInstanceOf(AccessDenied);
+  });
+});
+
+describe("portalRedirect(creatorId)", () => {
+  const CREATOR = "cre_0123456789abcdef0123456789abcdef";
+  const CODE = "b2".repeat(32);
+  const PORTAL = `https://checkout.cozeni.net/portal/${CREATOR}`;
+  const error = (code: string, status: number) =>
+    json({ error: { code, message: "x", request_id: "req_1" } }, status);
+  const privateHeaders = (response: Response) => {
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  };
+  it("発行したURLへ302で送る。購入者Cookieだけを本番のAPIへ転送する", async () => {
+    state.cookies.set("cozeni_customer", "a.b.c");
+    state.cookies.set("session", "site-secret");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    api(() => json({ url: `${PORTAL}?cozeni_portal_code=${CODE}` }));
+    const response = await portalRedirect(CREATOR);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      `${PORTAL}?cozeni_portal_code=${CODE}`,
+    );
+    privateHeaders(response);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://api.cozeni.net/external/v1/customer/portal-link",
+    );
+    const init = fetch.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("cookie")).toBe(
+      "cozeni_customer=a.b.c",
+    );
+    // URLとコードはログに出さない。
+    const logged = JSON.stringify([
+      log.mock.calls,
+      info.mock.calls,
+      err.mock.calls,
+    ]);
+    expect(logged).not.toContain(CODE);
+  });
+  it("サンドボックスでは購入者面のオリジンもサンドボックスのものだけを受け付ける", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    state.cookies.set("cozeni_customer", "a.b.c");
+    const sandboxPortal = `https://checkout-sandbox.cozeni.net/portal/${CREATOR}`;
+    api(() => json({ url: `${sandboxPortal}?cozeni_portal_code=${CODE}` }));
+    const response = await portalRedirect(CREATOR);
+    expect(response.status).toBe(302);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://api-sandbox.cozeni.net/external/v1/customer/portal-link",
+    );
+    api(() => json({ url: `${PORTAL}?cozeni_portal_code=${CODE}` }));
+    expect((await portalRedirect(CREATOR)).status).toBe(503);
+  });
+  it("Cookieが無ければAPIを呼ばず、Cozeniのその販売者のポータルへ送る（ポータルが確認コードの入場へ送る）", async () => {
+    api(() => json({}));
+    const response = await portalRedirect(CREATOR);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(PORTAL);
+    privateHeaders(response);
+  });
+  it("401（no_session）でもCozeniのポータルへ送る。サンドボックスならサンドボックスの購入者面", async () => {
+    state.cookies.set("cozeni_customer", "expired.jwt.value");
+    api(() => error("no_session", 401));
+    expect((await portalRedirect(CREATOR)).headers.get("location")).toBe(
+      PORTAL,
+    );
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    expect((await portalRedirect(CREATOR)).headers.get("location")).toBe(
+      `https://checkout-sandbox.cozeni.net/portal/${CREATOR}`,
+    );
+  });
+  it("COZENI_API_ORIGINで独自の接続先を使うときは購入者面が分からないので、401で返しリダイレクトしない", async () => {
+    vi.stubEnv("COZENI_API_ORIGIN", "http://localhost:8787");
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    api(() => error("no_session", 401));
+    state.cookies.set("cozeni_customer", "a.b.c");
+    const response = await portalRedirect(CREATOR);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "http://localhost:8787/external/v1/customer/portal-link",
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.has("location")).toBe(false);
+    privateHeaders(response);
+  });
+  it.each([
+    ["503", () => error("unavailable", 503)],
+    ["本文がno_sessionの503（契約外）", () => error("no_session", 503)],
+    [
+      "通信失敗",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+    ["検証に通らないURL", () => json({ url: "https://evil.example/" })],
+    [
+      "別の販売者のポータル",
+      () =>
+        json({
+          url: `https://checkout.cozeni.net/portal/cre_other?cozeni_portal_code=${CODE}`,
+        }),
+    ],
+  ])("%sでは503を返し、再入場へ変換しない", async (_label, respond) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    state.cookies.set("cozeni_customer", "a.b.c");
+    api(respond);
+    const response = await portalRedirect(CREATOR);
+    expect(response.status).toBe(503);
+    expect(response.headers.has("location")).toBe(false);
+    privateHeaders(response);
+  });
+  it("URLの販売者が違うときは、値を含まない固定文で設定の確認を促す", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    state.cookies.set("cozeni_customer", "a.b.c");
+    api(() =>
+      json({
+        url: `https://checkout.cozeni.net/portal/cre_other?cozeni_portal_code=${CODE}`,
+      }),
+    );
+    expect((await portalRedirect(CREATOR)).status).toBe(503);
+    // 引数は固定文の1つだけ（URL・コード・IDの値を足していない）。
+    expect(err.mock.calls).toEqual([
+      [
+        "[cozeni] 購入者ポータルへのリンクの応答を確認できませんでした。portalRedirect() に渡したクリエイターIDと、接続先の環境（COZENI_ENVIRONMENT）が合っているかを確認してください。",
+      ],
+    ]);
+  });
+  it.each(["", "prd_1", "cre_x/../../evil", "cre_x?next=1"])(
+    "creatorIdが不正（%s）なら問い合わせず503にする",
+    async (creatorId) => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      state.cookies.set("cozeni_customer", "a.b.c");
+      api(() => json({ url: `${PORTAL}?cozeni_portal_code=${CODE}` }));
+      const response = await portalRedirect(creatorId);
+      expect(response.status).toBe(503);
+      expect(response.headers.has("location")).toBe(false);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(err).toHaveBeenCalled();
+    },
+  );
+  it("接続先の設定が不正なら問い合わせず503にする", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "staging");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    state.cookies.set("cozeni_customer", "a.b.c");
+    api(() => json({ url: `${PORTAL}?cozeni_portal_code=${CODE}` }));
+    expect((await portalRedirect(CREATOR)).status).toBe(503);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

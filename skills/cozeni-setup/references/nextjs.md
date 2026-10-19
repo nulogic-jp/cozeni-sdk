@@ -80,7 +80,25 @@ CLI が返した購入リンクを `<a>` で置くだけ。ルートも秘密も
 <a href="https://checkout.cozeni.net/checkout/...">購入する</a>
 ```
 
-## 5. 環境変数
+## 5. 購入者ポータルへのボタン（利用者が求めたときだけ）
+
+購入した商品の一覧（Cozeni の購入者ポータル）へ送るボタンを置くときは、Route Handler で `portalRedirect("<クリエイターID>")` を返し、ボタンはそのルートへの `<a>` にする。クリエイターIDは `npx cozeni whoami --json` の `data.creator_id`（商品IDと同じく、サンドボックスと本番で値が違う）。
+
+```ts
+// app/portal/route.ts
+import { portalRedirect } from "@nulogic/cozeni-sdk/next";
+
+export const dynamic = "force-dynamic";
+
+export function GET() {
+  return portalRedirect("cre_...");
+}
+```
+
+- ボタンは `<a href="/portal">` にする。`<Link>` にしない（prefetch で押す前にリンクが発行される）。ページの描画時に発行して `<a href>` に埋め込まない（60秒で切れる）。
+- 戻り先をクエリから受け取る作りにしない。発行した URL をログに出さない。
+
+## 6. 環境変数
 
 | 変数 | 必要か |
 |---|---|

@@ -42,6 +42,7 @@ const requiredFiles = [
   "examples/nextjs/app/members/page.tsx",
   "examples/nextjs/app/members/actions.ts",
   "examples/nextjs/app/api/protected/route.ts",
+  "examples/nextjs/app/portal/route.ts",
   "examples/nextjs/lib/cozeni.ts",
   "examples/nextjs/lib/content.ts",
   "examples/nextjs/proxy.ts",

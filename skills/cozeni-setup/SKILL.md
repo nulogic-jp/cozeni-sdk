@@ -3,7 +3,7 @@ name: cozeni-setup
 description: Cozeni（@nulogic/cozeni-sdk）で有料コンテンツを販売する作業全般で使う。サイトへの購入ボタンと購入者限定ページの導入、商品の作成・価格や限定ページの変更、購入リンクの取得、「買えない」「もう売れる？」「審査は通った？」など販売状態の確認と原因の調査を扱う。
 license: MIT
 metadata:
-  cozeni-sdk-version: ">=0.6.0 <0.7.0"
+  cozeni-sdk-version: ">=0.7.0 <0.8.0"
 ---
 
 # Cozeni
@@ -124,7 +124,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 - 承認の返事を待ち、`npx cozeni login --complete --profile production --json` を実行する。本番のアカウントが `init` で覚えたものと一致すれば、CLI が既定の接続先を本番に書き換える（`data.switched_to_production: true`）。別のアカウントなら `creator_mismatch` で止まり、切り替えない。
 - 本番にログイン済みで一致しているときは、承認URLは出ない。本番への導入はすでに許可を得ているので、`npx cozeni switch --json` で切り替える。
-- 切り替えたあと、`data.next_step` に従う。テストで確定した商品名・価格・限定にする内容のまま、**聞き直さずに** 本番で同じ内容の商品を作る（`products create`。同じ内容があれば作らずに返る。`--access-url` は 5 で聞いた本番の公開アドレス）。コード中の商品IDと購入リンクを本番のものに差し替え、`COZENI_ENVIRONMENT` を外す。**本番では決済を試さず**、7 の「購入していない状態で `enter_url` へリダイレクトされる」確認までを行う。
+- 切り替えたあと、`data.next_step` に従う。テストで確定した商品名・価格・限定にする内容のまま、**聞き直さずに** 本番で同じ内容の商品を作る（`products create`。同じ内容があれば作らずに返る。`--access-url` は 5 で聞いた本番の公開アドレス）。コード中の商品IDと購入リンク（購入者ポータルへのボタンを置いたならクリエイターIDも）を本番のものに差し替え、`COZENI_ENVIRONMENT` を外す。**本番では決済を試さず**、7 の「購入していない状態で `enter_url` へリダイレクトされる」確認までを行う。
 
 ### 10. `AGENTS.md` への案内
 

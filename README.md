@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.6.6 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.7.0 init --creator <クリエイターID>
 ```
 
 `--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
@@ -234,6 +234,43 @@ const response = enterRedirectResponse(result, productId); // Web標準Response(
 
 両clientに `fetch` と `timeoutMs`（既定10秒）を注入できます。エラーは `CozeniError`（`code` / `status` / `requestId` / `retryAfterSeconds`）で、秘密や生の応答を保持しません。
 
+### 購入者ポータルへ送る
+
+サイトですでに入場している購入者を、確認コードの入力なしでCozeniの購入者ポータル（その販売者から購入した商品の一覧）へ送れます。サイトに `/portal` のようなルートを置き、「購入した商品」などのボタンはそのルートへのリンクにします。ルートのサーバー処理が `createPortalLink()` でURLを発行し、そのURLへ302でリダイレクトします。
+
+```ts
+import {CozeniError, createCustomerClient} from '@nulogic/cozeni-sdk';
+
+const customer = createCustomerClient({environment: 'production'});
+const creatorId = 'cre_...'; // 販売者のクリエイターID（秘密ではない）
+
+// GET /portal
+export async function portal(request: Request): Promise<Response> {
+  const headers = {'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer'};
+  try {
+    const {url} = await customer.createPortalLink({
+      cookieHeader: request.headers.get('cookie') ?? undefined,
+      creatorId,
+    });
+    return new Response(null, {status: 302, headers: {...headers, Location: url}});
+  } catch (error) {
+    if (error instanceof CozeniError && error.code === 'no_session') {
+      // このサイトで入場していない。コード無しのポータルは、確認コードでの入場へ進める。
+      const portal = `https://checkout.cozeni.net/portal/${creatorId}`;
+      return new Response(null, {status: 302, headers: {...headers, Location: portal}});
+    }
+    return new Response('時間をおいてもう一度お試しください。', {status: 503, headers});
+  }
+}
+```
+
+- 返るURLは60秒・1回限りのコード付きです。**ページの描画時に発行して `<a href>` へ埋め込まないでください**（60秒で切れます。切れたURLを開いた購入者は、Cozeniの確認コードでの入場に進みます）。ボタンは押されたときに発行するルートへのリンクにし、prefetchされる仕組み（Next.jsの `<Link>` など）を使いません。
+- 返ったURLとコードを、アクセスログ・解析・エラー報告・レスポンスのキャッシュに残さないでください。
+- 送り先はAPIの応答と自分で決めたクリエイターIDだけで決め、リクエストのクエリ（`?next=` など）からは受け取りません（オープンリダイレクトを作らないため）。
+- `cozeni_customer` Cookieだけを転送します。Cookieが無い・不正ならAPIを呼ばずに `no_session` を投げます。APIの401も `no_session`、503は `unavailable`、通信の失敗は `network_error` / `timeout` です。`unavailable` などの障害を再入場の要求に変えないでください。
+- URLは構造で検証してから返します（httpsが必須、httpはloopbackだけ、userinfo・fragment無し、pathnameは `/portal/{クリエイターID}`、クエリは `cozeni_portal_code` の1個だけ）。`environment` か既知のAPIオリジンで本番・サンドボックスにつないでいれば、URLのオリジンがその環境の購入者面（上の「サンドボックス」の表の購入リンクのオリジン）と一致することも確かめます。`creatorId` を渡すと、URLのクリエイターIDが一致することも確かめます。合わなければ `invalid_response` を投げます。
+- コード無しのポータル（`{購入者面のオリジン}/portal/{クリエイターID}`）は、Cozeni側のセッションがあれば一覧を出し、無ければ確認コードでの入場へ進めます。サンドボックスでは購入者面のオリジンを `https://checkout-sandbox.cozeni.net` にします。
+
 ## JavaScript / TypeScriptサーバーの導入例
 
 [`examples/javascript-server`](examples/javascript-server) に、Web標準 `Request` / `Response` の保護ハンドラーとNode.js HTTP接続例があります。Express、Fastify、Hono、Nuxt、SvelteKit、Astro SSR、React Router、Cloudflare Workers等では、同じサーバー境界を既存のroute・loader・actionへ合わせて実装します。
@@ -274,12 +311,29 @@ export default async function Page() {
 <a href="https://checkout.cozeni.net/checkout/...">購入する</a>
 ```
 
+```ts
+// app/portal/route.ts（購入者ポータルへ送るボタンの遷移先）
+import { portalRedirect } from "@nulogic/cozeni-sdk/next";
+
+export const dynamic = "force-dynamic";
+
+export function GET() {
+  return portalRedirect("cre_..."); // クリエイターID（`npx cozeni whoami --json` の creator_id）
+}
+```
+
+```tsx
+// ボタン。<Link>にしない（prefetchで、押す前にリンクを発行させない）
+<a href="/portal">購入した商品</a>
+```
+
 | API | 振る舞い |
 |---|---|
 | `cozeniProxy(request)` | `?cozeni_code` 付きのGETでコードを交換し、`cozeni_customer` を設定して、コードを除いた同じURLへ303で戻す。結果は1回だけ有効な `cozeni_handoff` Cookie（`ok` / `invalid_code` / `unavailable`、60秒）で伝え、次のリクエストではページへ通したうえで応答で消す |
 | `handleCozeniHandoff(request, options?)` / `clearCozeniHandoff(request, response)` | 既存のmiddleware / proxyと組み合わせる用。前者はコードの交換だけを行い `Response \| undefined` を返す。後者は既存の応答に印の消去を足す |
 | `requireEntitlement(productId)` | page専用。権利が無ければ `enter_url` へリダイレクトする。`cozeni_handoff` の印があればリダイレクトせず `AccessDenied` を投げる（印が `unavailable` なら理由も `unavailable`） |
 | `entitlement(productId)` / `denialResponse(result, productId)` | Route Handler・Server Action用。リダイレクトしない |
+| `portalRedirect(creatorId, options?)` | Route Handler用。購入者ポータルへのリンクを発行して302で送る。このサイトで入場していなければ、コード無しのその販売者のポータル（Cozeniが確認コードでの入場へ進める）へ302。発行できなければ503（応答が合わない、たとえば返ったURLの販売者やオリジンが違うときは、クリエイターIDと `COZENI_ENVIRONMENT` の確認を促す固定文をサーバーのログに出す）。`COZENI_API_ORIGIN` で独自の接続先を使うときは購入者面のオリジンが分からないので、入場していなければ401を返す |
 
 戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
 
@@ -291,7 +345,8 @@ export default async function Page() {
 | ページ / HTML / RSC | `app/members/page.tsx`（`requireEntitlement`） |
 | Route Handler | `app/api/protected/route.ts`（401 / 403 / 503とenter_urlをJSONで返す） |
 | Server Action | `app/members/actions.ts` |
-| 購入ボタン | `app/page.tsx` |
+| 購入ボタン・購入者ポータルへのボタン | `app/page.tsx` |
+| 購入者ポータルへ送るルート | `app/portal/route.ts`（`portalRedirect`） |
 
 起動は `examples/nextjs` で `bun run dev`。`.env.example` のとおり `COZENI_SITE_ORIGIN` を設定します。ハンドオフURLの `cozeni_code` はアクセスログに残さないでください。
 
