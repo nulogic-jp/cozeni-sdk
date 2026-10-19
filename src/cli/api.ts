@@ -1,7 +1,13 @@
 // プロファイル（= 接続するCozeniの環境）の解決と、キーを発行時のオリジンに結ぶ処理、
 // SDKのエラーを利用者向けの案内へ変換する処理。
 import { createManagementClient } from "../index.js";
-import { CozeniError, origin, type Send, transport } from "../transport.js";
+import {
+  CHECKOUT_ORIGINS,
+  CozeniError,
+  origin,
+  type Send,
+  transport,
+} from "../transport.js";
 import { CliError } from "./errors.js";
 import { CLI, INIT_CLI } from "./invocation.js";
 import {
@@ -16,9 +22,10 @@ export const PRODUCTION_API_ORIGIN = "https://api.cozeni.net";
 export const PRODUCTION_APP_ORIGIN = "https://cozeni.net";
 export const SANDBOX_API_ORIGIN = "https://api-sandbox.cozeni.net";
 export const SANDBOX_APP_ORIGIN = "https://sandbox.cozeni.net";
-// 購入者面（checkout・enter）。管理画面とは別のサブドメインに置かれる（本体 docs N-2）。
-export const PRODUCTION_CHECKOUT_ORIGIN = "https://checkout.cozeni.net";
-export const SANDBOX_CHECKOUT_ORIGIN = "https://checkout-sandbox.cozeni.net";
+// 購入者面（checkout・enter・portal）。管理画面とは別のサブドメインに置かれる（本体 docs N-2）。
+// 値はSDK本体（購入者ポータルのURLの照合）と共有する。
+export const PRODUCTION_CHECKOUT_ORIGIN = CHECKOUT_ORIGINS.production;
+export const SANDBOX_CHECKOUT_ORIGIN = CHECKOUT_ORIGINS.sandbox;
 
 /**
  * 接続先を固定するプロファイル。名前はサーバーが返す environment と同じにする。

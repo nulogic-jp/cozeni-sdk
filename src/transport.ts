@@ -27,6 +27,8 @@ const knownCodes = new Set([
   "rate_limited",
   "internal",
   "unavailable",
+  // 購入者ポータルへのリンク発行で、購入者のセッションが無い・無効。
+  "no_session",
   "invalid_response",
   "network_error",
   "timeout",
@@ -90,6 +92,22 @@ export const API_ORIGINS = {
   sandbox: "https://api-sandbox.cozeni.net",
 } as const;
 export type Environment = keyof typeof API_ORIGINS;
+/** 環境ごとの購入者面（購入・入場・購入者ポータル）のオリジン。管理画面とは別のホスト。 */
+export const CHECKOUT_ORIGINS = {
+  production: "https://checkout.cozeni.net",
+  sandbox: "https://checkout-sandbox.cozeni.net",
+} as const satisfies Record<Environment, string>;
+
+/**
+ * 解決済みのAPIオリジンが既知の環境のものなら、その環境の購入者面のオリジンを返す。
+ * 開発用の独自のオリジン（COZENI_API_ORIGIN など）では分からないので undefined。
+ */
+export function knownCheckoutOrigin(apiOrigin: string): string | undefined {
+  for (const environment of Object.keys(API_ORIGINS) as Environment[])
+    if (API_ORIGINS[environment] === apiOrigin)
+      return CHECKOUT_ORIGINS[environment];
+  return undefined;
+}
 
 export function isEnvironment(value: unknown): value is Environment {
   return typeof value === "string" && Object.hasOwn(API_ORIGINS, value);

@@ -2,3 +2,5 @@
 // どちらも秘密ではないので、環境変数にしなくてよい。
 export const PRODUCT_ID = "prd_example";
 export const CHECKOUT_URL = "https://checkout.cozeni.net/checkout/example";
+// 購入者ポータル（/portal）の送り先の販売者。`npx cozeni whoami --json` の creator_id を書く。
+export const CREATOR_ID = "cre_example";

@@ -3,9 +3,11 @@ import {
   CozeniError,
   failure,
   isLoopback,
+  knownCheckoutOrigin,
   type ManagementClientOptions,
   origin,
   record,
+  resolveApiOrigin,
   transport,
 } from "./transport.js";
 
@@ -132,6 +134,51 @@ function validEnterUrl(value: unknown, productId: string): URL | undefined {
     return undefined;
   return url;
 }
+// クリエイターID（`cre_` で始まる）の形式。URLのパスに入れるため、記号を含めない。
+const CREATOR_ID = /^cre_[A-Za-z0-9]{1,128}$/;
+const PORTAL_PATH = /^\/portal\/(cre_[A-Za-z0-9]{1,128})$/;
+const PORTAL_CODE = /^[A-Za-z0-9_-]{1,256}$/;
+/**
+ * 購入者ポータルのURL（`/portal/{クリエイターID}?cozeni_portal_code=…`）の構造検証。
+ * enter_urlと同じく、API応答をそのまま遷移先にせず構造で縛る。
+ *
+ * - httpsが必須。httpはloopbackだけ許可（開発用）
+ * - userinfo・fragmentを含まない
+ * - pathnameは"/portal/{クリエイターID}"。creatorIdを渡したらその値と一致する
+ * - クエリは"cozeni_portal_code"の1個だけで、値は空でない英数字・"_"・"-"
+ * - 既知の環境（本番・サンドボックス）につないでいれば、その環境の購入者面のオリジンと一致する
+ *
+ * いずれかに反する場合はundefined（採用しない）。
+ */
+function validPortalUrl(
+  value: unknown,
+  expected: { origin?: string; creatorId?: string },
+): URL | undefined {
+  if (typeof value !== "string") return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  const creator = PORTAL_PATH.exec(url.pathname)?.[1];
+  const code = url.searchParams.get("cozeni_portal_code");
+  if (
+    (url.protocol !== "https:" &&
+      !(url.protocol === "http:" && isLoopback(url))) ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    !creator ||
+    (expected.creatorId !== undefined && creator !== expected.creatorId) ||
+    (expected.origin !== undefined && url.origin !== expected.origin) ||
+    [...url.searchParams.keys()].length !== 1 ||
+    !code ||
+    !PORTAL_CODE.test(code)
+  )
+    return undefined;
+  return url;
+}
 function identifier(id: string): string {
   if (!id || id.length > 200 || id === "." || id === "..")
     throw new CozeniError("invalid_input");
@@ -209,7 +256,43 @@ function customerToken(cookieHeader?: string): string | undefined {
 }
 export function createCustomerClient(options: ClientOptions) {
   const send = transport(options);
+  // 購入者ポータルのURLを照合する購入者面のオリジン（既知の環境のときだけ）。
+  const checkoutOrigin = knownCheckoutOrigin(resolveApiOrigin(options));
   return {
+    /**
+     * 購入者ポータル（Cozeniの `/portal/{クリエイターID}`）を確認コードの入力なしで開く
+     * URLを発行する。URLのコードは60秒・1回限りなので、購入者がボタンを押したときに
+     * サーバーで呼び、返ったURLへそのままリダイレクトする（ページの描画時に発行しない）。
+     * URLとコードはログ・解析・エラー・キャッシュに残さない。
+     *
+     * 失敗はCozeniErrorで投げる。`no_session`（購入者Cookieが無い・不正。APIを呼ばない。
+     * またはAPIの401）、`unavailable`（503）、`network_error` / `timeout`、
+     * `invalid_response`（URLが構造検証に通らない）など。
+     */
+    async createPortalLink(
+      input: { cookieHeader?: string; creatorId?: string } = {},
+    ): Promise<{ url: string }> {
+      if (input.creatorId !== undefined && !CREATOR_ID.test(input.creatorId))
+        throw new CozeniError("invalid_input");
+      // 認証が必須のAPIなので、Cookieが無ければ呼ばない（結果は必ず401になる）。
+      const token = customerToken(input.cookieHeader);
+      if (!token) throw new CozeniError("no_session");
+      const { response, data } = await send(
+        "/customer/portal-link",
+        "POST",
+        undefined,
+        { Cookie: `cozeni_customer=${token}` },
+      );
+      if (response.status !== 200) throw failure(response, data);
+      const url = record(data)
+        ? validPortalUrl(data.url, {
+            origin: checkoutOrigin,
+            creatorId: input.creatorId,
+          })
+        : undefined;
+      if (!url) throw new CozeniError("invalid_response", response.status);
+      return { url: url.href };
+    },
     async exchangeHandoff(code: string): Promise<{ token: string }> {
       if (!code || code.length > 128) throw new CozeniError("invalid_input");
       const { response, data } = await send(

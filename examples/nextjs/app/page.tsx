@@ -11,6 +11,10 @@ export default function Home() {
       <p>
         <a href="/members">購入者限定ページへ</a>
       </p>
+      <p>
+        {/* <Link>にしない（prefetchで押す前にポータルのリンクを発行させない）。 */}
+        <a href="/portal">購入した商品</a>
+      </p>
     </main>
   );
 }

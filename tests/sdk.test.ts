@@ -353,6 +353,193 @@ describe("購入者API", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+describe("購入者ポータルへのリンク（createPortalLink）", () => {
+  const creatorId = "cre_0123456789abcdef0123456789abcdef";
+  const code = "a1".repeat(32);
+  const portalUrl = `http://localhost:5173/portal/${creatorId}?cozeni_portal_code=${code}`;
+  const errorBody = (errorCode: string) => ({
+    error: { code: errorCode, message: "x", request_id: "req_1" },
+  });
+  it("購入者Cookieだけを本文なしのPOSTで転送し、URLを返す", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok({ url: portalUrl }));
+    const result = await createCustomerClient({
+      apiOrigin,
+      fetch,
+    }).createPortalLink({
+      cookieHeader: "auth=secret; cozeni_customer=jwt.value.test; other=x",
+    });
+    expect(result).toEqual({ url: portalUrl });
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(`${apiOrigin}/external/v1/customer/portal-link`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    const headers = new Headers(init.headers);
+    expect(headers.get("Cookie")).toBe("cozeni_customer=jwt.value.test");
+    expect(headers.has("Authorization")).toBe(false);
+    expect(headers.has("Content-Type")).toBe(false);
+  });
+  it("401はno_sessionとして投げる（invalid_responseに潰さない）", async () => {
+    const client = createCustomerClient({
+      apiOrigin,
+      fetch: vi.fn().mockResolvedValue(ok(errorBody("no_session"), 401)),
+    });
+    await expect(
+      client.createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" }),
+    ).rejects.toMatchObject({ code: "no_session", status: 401 });
+  });
+  it("503はunavailableとして投げる", async () => {
+    const client = createCustomerClient({
+      apiOrigin,
+      fetch: vi.fn().mockResolvedValue(ok(errorBody("unavailable"), 503)),
+    });
+    await expect(
+      client.createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" }),
+    ).rejects.toMatchObject({ code: "unavailable", status: 503 });
+  });
+  it("通信失敗はnetwork_errorとして投げ、例外の本文を保持しない", async () => {
+    const client = createCustomerClient({
+      apiOrigin,
+      fetch: vi.fn().mockRejectedValue(new Error(`leaked ${code}`)),
+    });
+    const error = await client
+      .createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CozeniError);
+    expect(error).toMatchObject({ code: "network_error" });
+    expect(String(error)).not.toContain(code);
+  });
+  it.each([
+    undefined,
+    "",
+    "other=x",
+    "cozeni_customer=",
+    "cozeni_customer=a; cozeni_customer=b",
+    "cozeni_customer=不正な値",
+  ])(
+    "Cookieが無い・不正なら(%s)APIを呼ばずにno_sessionを投げる",
+    async (cookieHeader) => {
+      const fetch = vi.fn();
+      await expect(
+        createCustomerClient({ apiOrigin, fetch }).createPortalLink({
+          cookieHeader,
+        }),
+      ).rejects.toMatchObject({ code: "no_session" });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+  it("URLは構造検証（http(s)の絶対URL・/portal/{creator}・コード1個だけ）を通ったものだけ返す", async () => {
+    const path = `/portal/${creatorId}`;
+    const cases: [unknown, boolean][] = [
+      [portalUrl, true],
+      [`https://checkout.example${path}?cozeni_portal_code=${code}`, true],
+      // httpはloopbackだけ許可する。
+      [`http://checkout.example${path}?cozeni_portal_code=${code}`, false],
+      ["javascript:alert(1)", false],
+      ["/portal/cre_x?cozeni_portal_code=abc", false],
+      [
+        `https://user:pass@checkout.example/portal/${creatorId}?cozeni_portal_code=${code}`,
+        false,
+      ],
+      [`https://checkout.example/enter?cozeni_portal_code=${code}`, false],
+      [
+        `https://checkout.example/portal/cre_x/extra?cozeni_portal_code=${code}`,
+        false,
+      ],
+      [
+        `https://checkout.example/portal/prd_x?cozeni_portal_code=${code}`,
+        false,
+      ],
+      [`https://checkout.example${path}`, false],
+      [`https://checkout.example${path}?cozeni_portal_code=`, false],
+      [
+        `https://checkout.example${path}?cozeni_portal_code=${code}&next=https://evil.example`,
+        false,
+      ],
+      [
+        `https://checkout.example${path}?cozeni_portal_code=${code}&cozeni_portal_code=${code}`,
+        false,
+      ],
+      [`https://checkout.example${path}?cozeni_portal_code=${code}#top`, false],
+      [42, false],
+      [undefined, false],
+    ];
+    for (const [url, accepted] of cases) {
+      const body: Record<string, unknown> = {};
+      if (url !== undefined) body.url = url;
+      const client = createCustomerClient({
+        apiOrigin,
+        fetch: vi.fn().mockResolvedValue(ok(body)),
+      });
+      const result = client.createPortalLink({
+        cookieHeader: "cozeni_customer=a.b.c",
+      });
+      if (accepted) await expect(result).resolves.toEqual({ url });
+      else
+        await expect(result, String(url)).rejects.toMatchObject({
+          code: "invalid_response",
+        });
+    }
+  });
+  it("creatorIdを渡したら、URLの販売者が一致するときだけ返す", async () => {
+    const client = createCustomerClient({
+      apiOrigin,
+      fetch: vi.fn().mockResolvedValue(ok({ url: portalUrl })),
+    });
+    await expect(
+      client.createPortalLink({
+        cookieHeader: "cozeni_customer=a.b.c",
+        creatorId,
+      }),
+    ).resolves.toEqual({ url: portalUrl });
+    await expect(
+      client.createPortalLink({
+        cookieHeader: "cozeni_customer=a.b.c",
+        creatorId: "cre_other",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+  });
+  it.each([
+    ["production", "https://checkout.cozeni.net"],
+    ["sandbox", "https://checkout-sandbox.cozeni.net"],
+  ] as const)(
+    "既知の環境(%s)では購入者面のオリジン以外のURLを返さない",
+    async (environment, checkout) => {
+      const url = (origin: string) =>
+        `${origin}/portal/${creatorId}?cozeni_portal_code=${code}`;
+      const client = (value: string) =>
+        createCustomerClient({
+          environment,
+          fetch: vi.fn().mockResolvedValue(ok({ url: value })),
+        }).createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" });
+      await expect(client(url(checkout))).resolves.toEqual({
+        url: url(checkout),
+      });
+      for (const other of [
+        "https://evil.example",
+        environment === "production"
+          ? "https://checkout-sandbox.cozeni.net"
+          : "https://checkout.cozeni.net",
+      ])
+        await expect(client(url(other))).rejects.toMatchObject({
+          code: "invalid_response",
+        });
+    },
+  );
+  it("200以外の成功応答や壊れた本文はinvalid_responseにする", async () => {
+    for (const response of [
+      ok({ url: portalUrl }, 201),
+      new Response("壊れたJSON"),
+      ok([portalUrl]),
+    ]) {
+      await expect(
+        createCustomerClient({
+          apiOrigin,
+          fetch: vi.fn().mockResolvedValue(response),
+        }).createPortalLink({ cookieHeader: "cozeni_customer=a.b.c" }),
+      ).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+});
 describe("接続する環境", () => {
   const checked = async (
     options: Parameters<typeof createCustomerClient>[0],
