@@ -393,6 +393,9 @@ export function denialResponse(
   });
 }
 
+const PORTAL_INVALID_RESPONSE =
+  "[cozeni] 購入者ポータルへのリンクの応答を確認できませんでした。portalRedirect() に渡したクリエイターIDと、接続先の環境（COZENI_ENVIRONMENT）が合っているかを確認してください。";
+
 /**
  * 購入者ポータル（Cozeniの `/portal/{creatorId}`）へ送るRoute Handler用。
  * 「購入した商品」などのボタンの遷移先（例: `app/portal/route.ts` の `GET`）で呼び、
@@ -413,7 +416,7 @@ export function denialResponse(
  *   接続先を `COZENI_API_ORIGIN` で独自に指定しているときは購入者面のオリジンが
  *   分からないため、リダイレクトせず401を返す
  * - 発行できない（503・通信失敗・応答の検証失敗）ときは503。障害を再入場の要求に変えない。
- *   応答のURLが検証に通らないときは、クリエイターIDと接続先の確認を促す固定文をログに出す
+ *   応答が契約に合わない（URLの販売者・オリジンが違うなど）ときは、クリエイターIDと接続先の確認を促す固定文をログに出す
  * - 遷移先はAPIの応答と引数の `creatorId` だけで決め、リクエストのクエリからは受け取らない
  * - URLとコードはログに出さない
  *
@@ -468,12 +471,9 @@ export async function portalRedirect(
         headers: privateHeaders,
       });
     }
-    // 返ったURLが検証に通らない（多くは別の環境・別の販売者のクリエイターIDを書いている）。
-    // 原因を追えるよう固定文だけを出し、URL・コード・IDの値は出さない。
-    if (code === "invalid_response")
-      console.error(
-        "[cozeni] 購入者ポータルのURLを確認できませんでした。portalRedirect() に渡したクリエイターIDと、接続先の環境（COZENI_ENVIRONMENT）が合っているかを確認してください。",
-      );
+    // 応答が契約に合わない（多くは返ったURLの販売者・オリジンが合わない＝別の環境や別の販売者の
+    // クリエイターIDを書いている）。原因を追えるよう固定文だけを出し、URL・コード・IDの値は出さない。
+    if (code === "invalid_response") console.error(PORTAL_INVALID_RESPONSE);
     return new Response(
       "購入した商品のページを開けませんでした。時間をおいてもう一度お試しください。",
       { status: 503, headers: privateHeaders },

@@ -409,11 +409,12 @@ describe("portalRedirect(creatorId)", () => {
       }),
     );
     expect((await portalRedirect(CREATOR)).status).toBe(503);
-    expect(err).toHaveBeenCalledTimes(1);
-    const logged = JSON.stringify(err.mock.calls);
-    expect(logged).toContain("クリエイターID");
-    expect(logged).not.toContain(CODE);
-    expect(logged).not.toContain("cre_other");
+    // 引数は固定文の1つだけ（URL・コード・IDの値を足していない）。
+    expect(err.mock.calls).toEqual([
+      [
+        "[cozeni] 購入者ポータルへのリンクの応答を確認できませんでした。portalRedirect() に渡したクリエイターIDと、接続先の環境（COZENI_ENVIRONMENT）が合っているかを確認してください。",
+      ],
+    ]);
   });
   it.each(["", "prd_1", "cre_x/../../evil", "cre_x?next=1"])(
     "creatorIdが不正（%s）なら問い合わせず503にする",
