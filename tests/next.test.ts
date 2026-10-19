@@ -392,12 +392,28 @@ describe("portalRedirect(creatorId)", () => {
         }),
     ],
   ])("%sでは503を返し、再入場へ変換しない", async (_label, respond) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     state.cookies.set("cozeni_customer", "a.b.c");
     api(respond);
     const response = await portalRedirect(CREATOR);
     expect(response.status).toBe(503);
     expect(response.headers.has("location")).toBe(false);
     privateHeaders(response);
+  });
+  it("URLの販売者が違うときは、値を含まない固定文で設定の確認を促す", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    state.cookies.set("cozeni_customer", "a.b.c");
+    api(() =>
+      json({
+        url: `https://checkout.cozeni.net/portal/cre_other?cozeni_portal_code=${CODE}`,
+      }),
+    );
+    expect((await portalRedirect(CREATOR)).status).toBe(503);
+    expect(err).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(err.mock.calls);
+    expect(logged).toContain("クリエイターID");
+    expect(logged).not.toContain(CODE);
+    expect(logged).not.toContain("cre_other");
   });
   it.each(["", "prd_1", "cre_x/../../evil", "cre_x?next=1"])(
     "creatorIdが不正（%s）なら問い合わせず503にする",

@@ -333,7 +333,7 @@ export function GET() {
 | `handleCozeniHandoff(request, options?)` / `clearCozeniHandoff(request, response)` | 既存のmiddleware / proxyと組み合わせる用。前者はコードの交換だけを行い `Response \| undefined` を返す。後者は既存の応答に印の消去を足す |
 | `requireEntitlement(productId)` | page専用。権利が無ければ `enter_url` へリダイレクトする。`cozeni_handoff` の印があればリダイレクトせず `AccessDenied` を投げる（印が `unavailable` なら理由も `unavailable`） |
 | `entitlement(productId)` / `denialResponse(result, productId)` | Route Handler・Server Action用。リダイレクトしない |
-| `portalRedirect(creatorId, options?)` | Route Handler用。購入者ポータルへのリンクを発行して302で送る。このサイトで入場していなければ、コード無しのその販売者のポータル（Cozeniが確認コードでの入場へ進める）へ302。発行できなければ503。`COZENI_API_ORIGIN` で独自の接続先を使うときは購入者面のオリジンが分からないので、入場していなければ401を返す |
+| `portalRedirect(creatorId, options?)` | Route Handler用。購入者ポータルへのリンクを発行して302で送る。このサイトで入場していなければ、コード無しのその販売者のポータル（Cozeniが確認コードでの入場へ進める）へ302。発行できなければ503（返ったURLの販売者やオリジンが合わないときは、クリエイターIDと `COZENI_ENVIRONMENT` の確認を促す固定文をサーバーのログに出す）。`COZENI_API_ORIGIN` で独自の接続先を使うときは購入者面のオリジンが分からないので、入場していなければ401を返す |
 
 戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
 
