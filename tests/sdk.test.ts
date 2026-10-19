@@ -159,12 +159,17 @@ describe("商品画像（putImage / deleteImage）", () => {
 
   it("putImageはmultipartのfile欄にBlobを入れ、Content-Typeを付けずにPUTする", async () => {
     const fetch = vi.fn().mockImplementation(async () => ok({ id: "p" }));
-    await client(fetch).products.putImage("p 1", png());
+    const file = png();
+    await client(fetch).products.putImage("p 1", file);
     const [url, init] = fetch.mock.calls[0] ?? [];
     expect(url).toBe(`${apiOrigin}/external/v1/products/p%201/image`);
     expect(init.method).toBe("PUT");
     expect(init.body).toBeInstanceOf(FormData);
-    expect(init.body.get("file")).toBeInstanceOf(Blob);
+    expect(init.body.getAll("file")).toHaveLength(1);
+    // 渡した画像のバイト列がそのまま送られる。
+    expect(new Uint8Array(await init.body.get("file").arrayBuffer())).toEqual(
+      new Uint8Array(await file.arrayBuffer()),
+    );
     // boundaryはfetchが付けるため、手で設定しない。
     expect(new Headers(init.headers).has("Content-Type")).toBe(false);
     expect(new Headers(init.headers).get("Authorization")).toBe(

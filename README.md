@@ -176,6 +176,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 ## 管理API
 
 ```ts
+import {readFile} from 'node:fs/promises';
 import {createManagementClient} from '@nulogic/cozeni-sdk';
 
 const client = createManagementClient({
@@ -195,7 +196,8 @@ const product = await client.products.create(
 const link = await client.checkoutLinks.get(product.id);
 
 // 商品画像（Blob / File）。応答は更新後の商品（images に入る）
-const withImage = await client.products.putImage(product.id, new Blob([bytes], {type: 'image/png'}));
+const image = new Blob([await readFile('./cover.png')], {type: 'image/png'});
+const withImage = await client.products.putImage(product.id, image);
 const withoutImage = await client.products.deleteImage(product.id);
 ```
 
