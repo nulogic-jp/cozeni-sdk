@@ -9,6 +9,7 @@ import {
   createManagementClient,
   type Entitlement,
   type Product,
+  type ProductImage,
   type ProductList,
   type UpdateProduct,
 } from "../src/index.js";
@@ -26,11 +27,19 @@ const account = {
     warnings: [...fixture.account.sales.warnings],
   },
 } satisfies Account;
-const product = fixture.product satisfies Product;
+// as constのimagesはreadonlyタプルなので、公開型（可変配列）へ複製して型検査する。
+const product = {
+  ...fixture.product,
+  images: fixture.product.images.map((image) => ({ ...image })),
+} satisfies Product;
 const input = fixture.create_product satisfies CreateProduct;
 const update = {
   price_jpy: fixture.create_product.price_jpy,
 } satisfies UpdateProduct;
+// 画像アップロードの入力。形式は中身で判定されるため、PNGシグネチャの数バイトで足りる。
+const image = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+  type: "image/png",
+});
 const link = fixture.checkout_link satisfies CheckoutLink;
 const list = { items: [product], next_cursor: null } satisfies ProductList;
 const entitlements = fixture.entitlements satisfies readonly {
@@ -201,9 +210,25 @@ function contractFetch(id: string, status: number, responseBody: unknown) {
     }
     const requestSchema =
       operation.requestBody?.content["application/json"]?.schema;
+    const multipartSchema =
+      operation.requestBody?.content["multipart/form-data"]?.schema;
     if (requestSchema)
       expect(matches(requestSchema, JSON.parse(String(init?.body)))).toBe(true);
-    else expect(init?.body).toBeUndefined();
+    else if (multipartSchema) {
+      // multipartは契約のrequired欄がBlobで入っていること。Content-Typeを手で
+      // 設定するとfetchが付けるboundaryが壊れるため、ヘッダーに無いことも確かめる。
+      const body = init?.body;
+      expect(body).toBeInstanceOf(FormData);
+      const target = multipartSchema.$ref
+        ? specification.components.schemas[
+            multipartSchema.$ref.split("/").at(-1) ?? ""
+          ]
+        : multipartSchema;
+      expect(target?.required?.length).toBeGreaterThan(0);
+      for (const field of target?.required ?? [])
+        expect((body as FormData).get(field)).toBeInstanceOf(Blob);
+      expect(headers.has("Content-Type")).toBe(false);
+    } else expect(init?.body).toBeUndefined();
     for (const parameter of operation.parameters ?? []) {
       if (parameter.in === "header" && parameter.required) {
         const value = headers.get(parameter.name);
@@ -249,6 +274,18 @@ const managementCases = [
     call: (client: Management) => client.products.update(product.id, update),
   },
   {
+    id: "externalPutProductImage",
+    status: 200,
+    response: product,
+    call: (client: Management) => client.products.putImage(product.id, image),
+  },
+  {
+    id: "externalDeleteProductImage",
+    status: 200,
+    response: product,
+    call: (client: Management) => client.products.deleteImage(product.id),
+  },
+  {
     id: "externalGetCheckoutLink",
     status: 200,
     response: link,
@@ -270,9 +307,6 @@ const uncoveredOperations = [
   "externalCliLogout",
   "externalStartTestPurchase",
   "externalRefundTestPurchase",
-  // 商品画像。SDKに対応する公開APIがない。
-  "externalPutProductImage",
-  "externalDeleteProductImage",
 ];
 describe("正式外部v1契約とSDK", () => {
   it("JSONと型検査用fixtureが一致し、公開型が導入者に返る", () => {
@@ -286,6 +320,12 @@ describe("正式外部v1契約とSDK", () => {
     expectTypeOf<ReturnType<Management["products"]["get"]>>().toEqualTypeOf<
       Promise<Product>
     >();
+    expectTypeOf<
+      ReturnType<Management["products"]["putImage"]>
+    >().toEqualTypeOf<Promise<Product>>();
+    expectTypeOf<
+      ReturnType<Management["products"]["deleteImage"]>
+    >().toEqualTypeOf<Promise<Product>>();
     expectTypeOf<
       ReturnType<Management["checkoutLinks"]["get"]>
     >().toEqualTypeOf<Promise<CheckoutLink>>();
@@ -342,6 +382,53 @@ describe("正式外部v1契約とSDK", () => {
       });
     },
   );
+  it.each([
+    { status: 413, code: "image_too_large" },
+    { status: 415, code: "unsupported_image_type" },
+  ])(
+    "画像のHTTP $status / $code は構造化エラーで返す（invalid_responseに潰さない）",
+    async ({ status, code }) => {
+      const body = {
+        error: { ...fixture.error.error, code },
+      };
+      const fetch = contractFetch("externalPutProductImage", status, body);
+      await expect(
+        createManagementClient({ apiOrigin, apiKey, fetch }).products.putImage(
+          product.id,
+          image,
+        ),
+      ).rejects.toMatchObject({
+        status,
+        code,
+        requestId: fixture.error.error.request_id,
+      });
+    },
+  );
+  it("画像の削除は画像が無くても200の商品を返し、本文を送らない", async () => {
+    const withoutImage = { ...product, images: [] };
+    const fetch = contractFetch(
+      "externalDeleteProductImage",
+      200,
+      withoutImage,
+    );
+    expect(
+      await createManagementClient({
+        apiOrigin,
+        apiKey,
+        fetch,
+      }).products.deleteImage(product.id),
+    ).toEqual(withoutImage);
+  });
+  it("商品の説明（description）は任意・nullableで送れる", () => {
+    expectTypeOf<CreateProduct["description"]>().toEqualTypeOf<
+      string | null | undefined
+    >();
+    expectTypeOf<UpdateProduct["description"]>().toEqualTypeOf<
+      string | null | undefined
+    >();
+    expectTypeOf<Product["description"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<Product["images"]>().toEqualTypeOf<ProductImage[]>();
+  });
   it("標準リンクを新規作成した201も契約通り処理する", async () => {
     const fetch = contractFetch("externalEnsureCheckoutLink", 201, link);
     expect(

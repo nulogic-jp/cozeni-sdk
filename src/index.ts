@@ -68,10 +68,21 @@ export interface CreateProduct {
   name: string;
   price_jpy: number;
   access_url: string;
+  // Markdown。前後の空白を除いて4000コードポイントまで。null・空白だけなら説明なし。
+  // 長さはSDKでは検証せず、サーバーの判定（invalid_input）に任せる。
+  description?: string | null;
 }
 export type UpdateProduct = Partial<CreateProduct>;
-export interface Product extends CreateProduct {
+export interface ProductImage {
   id: string;
+  url: string;
+  content_type: string;
+  size_bytes: number;
+}
+export interface Product extends Omit<CreateProduct, "description"> {
+  id: string;
+  description: string | null;
+  images: ProductImage[];
   currency: "jpy";
   status: "active" | "archived";
   created_at: string;
@@ -229,6 +240,19 @@ export function createManagementClient(options: ManagementClientOptions) {
       },
       update: (id: string, input: UpdateProduct) =>
         request<Product>(`/products/${identifier(id)}`, "PATCH", input),
+      // 画像を1枚設定する（既存の画像は差し替わり、URLが変わる）。形式（JPEG・PNG・WebP）と
+      // 大きさ（5MB）はサーバーが判定するため、SDKでは検証しない（image_too_large /
+      // unsupported_image_typeをそのまま返す）。
+      putImage: async (productId: string, file: Blob) => {
+        const path = `/products/${identifier(productId)}/image`;
+        if (!(file instanceof Blob)) throw new CozeniError("invalid_input");
+        const form = new FormData();
+        form.append("file", file);
+        return request<Product>(path, "PUT", form);
+      },
+      // 画像が無くても200で商品を返す。
+      deleteImage: async (productId: string) =>
+        request<Product>(`/products/${identifier(productId)}/image`, "DELETE"),
     },
     checkoutLinks: {
       get: (productId: string) =>

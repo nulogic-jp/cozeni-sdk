@@ -24,6 +24,9 @@ const knownCodes = new Set([
   "idempotency_conflict",
   "product_archived",
   "checkout_link_disabled",
+  // 商品画像のアップロード。5MB超（413）と、JPEG・PNG・WebP以外（415）。
+  "image_too_large",
+  "unsupported_image_type",
   "rate_limited",
   "internal",
   "unavailable",
@@ -153,11 +156,14 @@ export function transport(options: ClientOptions, apiKey?: string): Send {
     try {
       const headers = new Headers({ Accept: "application/json", ...extra });
       if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
-      if (body !== undefined) headers.set("Content-Type", "application/json");
+      // FormDataはContent-Typeを設定しない（boundaryをfetchが付けるため）。
+      const multipart = body instanceof FormData;
+      if (body !== undefined && !multipart)
+        headers.set("Content-Type", "application/json");
       const response = await request(`${base}/external/v1${path}`, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined || multipart ? body : JSON.stringify(body),
         signal: controller.signal,
         // リダイレクトは追わない。"error"だと通信障害と区別できないため、
         // "manual"で受けて3xx（ブラウザ互換実装ではopaqueredirect）を明示的に拒否する。
