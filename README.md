@@ -5,7 +5,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 | | 用途 | 管理キー |
 |---|---|---|
 | CLI（`npx cozeni`） | ログイン、商品の作成・更新、購入リンクの取得、販売状態の確認 | ログインで取得（手元にだけ保存） |
-| 管理API | 商品の作成・更新・取得、購入リンクの発行 | 必要 |
+| 管理API | 商品の作成・更新・取得、商品画像の設定・削除、購入リンクの発行 | 必要 |
 | 購入者API | Cookieから購入権限を判定し、保護コンテンツの表示可否を決める | 不要 |
 | ハンドオフ | Cozeniの単回コードを自サイトのCookieへ交換 | 不要 |
 | `@nulogic/cozeni-sdk/next` | Next.js 15・16でのハンドオフ・認可・リダイレクト | 不要 |
@@ -17,7 +17,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.7.0 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.8.0 init --creator <クリエイターID>
 ```
 
 `--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
@@ -176,6 +176,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 ## 管理API
 
 ```ts
+import {readFile} from 'node:fs/promises';
 import {createManagementClient} from '@nulogic/cozeni-sdk';
 
 const client = createManagementClient({
@@ -184,13 +185,33 @@ const client = createManagementClient({
 });
 
 const product = await client.products.create(
-  {name: '商品名', price_jpy: 1000, access_url: 'https://example.com/members'},
+  {
+    name: '商品名',
+    price_jpy: 1000,
+    access_url: 'https://example.com/members',
+    description: '## 内容\n\n- 全40ページのPDF', // 任意。Markdown
+  },
   {idempotencyKey: '保存済みの冪等キー'},
 );
 const link = await client.checkoutLinks.get(product.id);
+
+// 商品画像（Blob / File）。応答は更新後の商品（images に入る）
+const image = new Blob([await readFile('./cover.png')], {type: 'image/png'});
+const withImage = await client.products.putImage(product.id, image);
+const withoutImage = await client.products.deleteImage(product.id);
 ```
 
 ほかに `account.get`、`products.list` / `get` / `update`、`checkoutLinks.ensure` があります。`price_jpy` は円をそのまま渡します。`create` の冪等キーはPOSTより前に保存し、応答を失っても同じ入力・同じキーで再送します（自動リトライはありません）。
+
+`description` は商品の説明（Markdown）で、`create` / `update` に任意で渡します。前後の空白を除いて4000コードポイントまでで、`null`・空白だけなら説明なしです。商品の `description` は文字列か `null` で、長さはSDKでは検証せずサーバーの判定（`invalid_input`）に任せます。
+
+商品画像は `products.putImage(productId, file)`（`PUT /products/{product_id}/image`、`externalPutProductImage`）で設定し、`products.deleteImage(productId)`（`DELETE /products/{product_id}/image`、`externalDeleteProductImage`）で外します。どちらも更新後の商品を返し、`images` に `id` / `url` / `content_type` / `size_bytes` が入ります。
+
+- `file` は `Blob`（`File` も可）で、`multipart/form-data` の `file` 欄に1枚送ります。`Blob` でなければ `invalid_input` を投げてAPIを呼びません。
+- 形式はJPEG・PNG・WebPで、5MB（5,242,880バイト）までです。形式は申告された `Content-Type` ではなく中身で判定します。SDKでは事前に検査せず、サーバーの `image_too_large`（413）・`unsupported_image_type`（415）を `CozeniError` のまま返します。
+- 画像は1枚だけです。`putImage` は既存の画像を差し替え、URL（`images[].url`）が変わります。画像のURLを控えている場合は、差し替えのたびに応答から取り直してください。
+- `deleteImage` は画像が無くても200で商品を返します。
+- 大きい画像のアップロードは10秒（`timeoutMs` の既定）で `timeout` になることがあります。必要なら `createManagementClient` の `timeoutMs` を延ばします（上限は120秒）。
 
 管理キーはサーバー環境変数のみに置き、ブラウザや `NEXT_PUBLIC_*` へ渡しません。
 

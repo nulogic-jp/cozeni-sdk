@@ -151,6 +151,109 @@ describe("管理API", () => {
     });
   });
 });
+describe("商品画像（putImage / deleteImage）", () => {
+  const client = (fetch: typeof globalThis.fetch) =>
+    createManagementClient({ apiOrigin, apiKey: "secret", fetch });
+  const png = () =>
+    new Blob([new Uint8Array([0x89, 0x50])], { type: "image/png" });
+
+  it("putImageはmultipartのfile欄にBlobを入れ、Content-Typeを付けずにPUTする", async () => {
+    const fetch = vi.fn().mockImplementation(async () => ok({ id: "p" }));
+    const file = png();
+    await client(fetch).products.putImage("p 1", file);
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(`${apiOrigin}/external/v1/products/p%201/image`);
+    expect(init.method).toBe("PUT");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(init.body.getAll("file")).toHaveLength(1);
+    // 渡した画像のバイト列がそのまま送られる。
+    expect(new Uint8Array(await init.body.get("file").arrayBuffer())).toEqual(
+      new Uint8Array(await file.arrayBuffer()),
+    );
+    // boundaryはfetchが付けるため、手で設定しない。
+    expect(new Headers(init.headers).has("Content-Type")).toBe(false);
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      "Bearer secret",
+    );
+  });
+  it("Fileも受け付ける（Blobの派生）", async () => {
+    const fetch = vi.fn().mockImplementation(async () => ok({ id: "p" }));
+    await client(fetch).products.putImage(
+      "p",
+      new File([new Uint8Array([1])], "a.png"),
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("Blob以外のfileはinvalid_inputにして、APIを呼ばない", async () => {
+    const fetch = vi.fn();
+    for (const file of [
+      "image",
+      undefined,
+      null,
+      Buffer.from([1, 2]),
+      new Uint8Array([1, 2]),
+    ])
+      await expect(
+        // 型の外から渡される値を想定し、あえてBlob以外を渡す。
+        client(fetch).products.putImage("p", file as unknown as Blob),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("不正なproductIdはinvalid_inputにして、APIを呼ばない", async () => {
+    const fetch = vi.fn();
+    for (const id of ["", "..", "a".repeat(201)]) {
+      await expect(
+        client(fetch).products.putImage(id, png()),
+      ).rejects.toMatchObject({
+        code: "invalid_input",
+      });
+      await expect(
+        client(fetch).products.deleteImage(id),
+      ).rejects.toMatchObject({
+        code: "invalid_input",
+      });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("deleteImageは本文もContent-Typeも送らずDELETEする", async () => {
+    const fetch = vi.fn().mockImplementation(async () => ok({ id: "p" }));
+    await client(fetch).products.deleteImage("p");
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(`${apiOrigin}/external/v1/products/p/image`);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    expect(new Headers(init.headers).has("Content-Type")).toBe(false);
+  });
+  it("JSON送信は従来どおりContent-Typeにapplication/jsonを付ける", async () => {
+    const fetch = vi.fn().mockImplementation(async () => ok({ id: "p" }));
+    await client(fetch).products.update("p", { description: null });
+    const [, init] = fetch.mock.calls[0] ?? [];
+    expect(new Headers(init.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+    expect(init.body).toBe(JSON.stringify({ description: null }));
+  });
+  it("image_too_largeとunsupported_image_typeをinvalid_responseへ潰さない", async () => {
+    for (const [status, code] of [
+      [413, "image_too_large"],
+      [415, "unsupported_image_type"],
+    ] as const) {
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(
+          ok({ error: { code, message: "x", request_id: "req_img" } }, status),
+        );
+      await expect(
+        client(fetch).products.putImage("p", png()),
+      ).rejects.toMatchObject({
+        status,
+        code,
+        requestId: "req_img",
+      });
+    }
+  });
+});
+
 describe("購入者API", () => {
   it("購入者Cookieだけを転送しAPIキーを要求しない", async () => {
     const fetch = vi.fn().mockResolvedValue(ok({ entitled: true }));
