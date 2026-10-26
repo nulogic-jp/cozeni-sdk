@@ -21,8 +21,11 @@ import {
   AccessDenied,
   clearCozeniHandoff,
   cozeniProxy,
+  createCheckout,
   entitlement,
+  getCustomerState,
   handleCozeniHandoff,
+  hasFeatureFlag,
   portalRedirect,
   requireEntitlement,
 } from "../src/next.js";
@@ -541,5 +544,170 @@ describe("COZENI_ENVIRONMENT", () => {
     api(() => json({ entitled: true }));
     await next.entitlement("prd_1");
     expect(info).not.toHaveBeenCalled();
+  });
+});
+
+describe("機能フラグの3関数（COZENI_API_KEYを環境変数から読む）", () => {
+  const KEY = `cozeni_sk_${"b".repeat(64)}`;
+  const PUBLIC_KEY = `cozeni_sk_${"a".repeat(64)}`;
+  const EMAIL = "hanako@example.com";
+  const MISSING =
+    "[cozeni] COZENI_API_KEY が設定されていません。管理画面の開発者設定で発行したキーを、サーバーの環境変数に設定してください。";
+  const BROWSER_KEY =
+    "[cozeni] NEXT_PUBLIC_COZENI_API_KEY はブラウザに渡ります。キーを消して失効させ、COZENI_API_KEY（NEXT_PUBLIC_ を付けない）に設定し直してください。";
+  const state = {
+    customer_id: "cus_1",
+    feature_flags: [
+      {
+        product_id: "prd_1",
+        benefit_id: "ben_1",
+        granted_at: "2026-10-23T03:00:00.000Z",
+        metadata: { plan: "pro" },
+      },
+    ],
+  };
+  let errorLog: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.stubEnv("COZENI_API_KEY", KEY);
+    vi.stubEnv("NEXT_PUBLIC_COZENI_API_KEY", undefined);
+    errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("COZENI_API_KEYとCOZENI_ENVIRONMENT=sandboxでサンドボックスのAPIへ、キーを付けて送る", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    api(() => json(state));
+    expect(await getCustomerState({ email: EMAIL })).toEqual({
+      customerId: "cus_1",
+      featureFlags: [
+        {
+          productId: "prd_1",
+          benefitId: "ben_1",
+          grantedAt: "2026-10-23T03:00:00.000Z",
+          metadata: { plan: "pro" },
+        },
+      ],
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://api-sandbox.cozeni.net/external/v1/customers/state",
+    );
+    const init = fetch.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      `Bearer ${KEY}`,
+    );
+  });
+  it("COZENI_ENVIRONMENTが無ければ本番のAPIへ送る", async () => {
+    api(() => json(state));
+    await getCustomerState({ email: EMAIL });
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://api.cozeni.net/external/v1/customers/state",
+    );
+  });
+  it("hasFeatureFlagは持っている商品ならgrantedとmetadataを返し、無ければ空で返す", async () => {
+    api(() => json(state));
+    expect(await hasFeatureFlag({ email: EMAIL, productId: "prd_1" })).toEqual({
+      granted: true,
+      metadata: { plan: "pro" },
+    });
+    expect(await hasFeatureFlag({ email: EMAIL, productId: "prd_2" })).toEqual({
+      granted: false,
+      metadata: {},
+    });
+  });
+  it("createCheckoutは購入画面を作り、camelCaseで返す", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    const url = "https://checkout-sandbox.cozeni.net/checkout/a?checkout=chk_1";
+    api(() =>
+      json(
+        { checkout_id: "chk_1", url, expires_at: "2026-10-26T03:30:00.000Z" },
+        201,
+      ),
+    );
+    expect(await createCheckout({ productId: "prd_1", email: EMAIL })).toEqual({
+      checkoutId: "chk_1",
+      url,
+      expiresAt: "2026-10-26T03:30:00.000Z",
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://api-sandbox.cozeni.net/external/v1/checkout/sessions",
+    );
+  });
+  it("COZENI_API_KEYが無ければinvalid_inputを投げ、通信せず、固定文を1回だけログに出す", async () => {
+    vi.stubEnv("COZENI_API_KEY", undefined);
+    api(() => json(state));
+    await expect(
+      hasFeatureFlag({ email: EMAIL, productId: "prd_1" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(errorLog.mock.calls).toEqual([[MISSING]]);
+  });
+  it.each([
+    ["", "空"],
+    ["   ", "空白だけ"],
+  ])("COZENI_API_KEYが%j（%s）でも設定なしとして扱う", async (value) => {
+    vi.stubEnv("COZENI_API_KEY", value);
+    api(() => json(state));
+    await expect(getCustomerState({ email: EMAIL })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    await expect(
+      createCheckout({ productId: "prd_1", email: EMAIL }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(errorLog.mock.calls).toEqual([[MISSING], [MISSING]]);
+  });
+  it("NEXT_PUBLIC_COZENI_API_KEYがあれば使わずにinvalid_inputを投げ、ログに値を出さない", async () => {
+    vi.stubEnv("NEXT_PUBLIC_COZENI_API_KEY", PUBLIC_KEY);
+    vi.stubEnv("COZENI_API_KEY", KEY);
+    api(() => json(state));
+    await expect(
+      hasFeatureFlag({ email: "a@example.com", productId: "prd_1" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(errorLog.mock.calls).toEqual([[BROWSER_KEY]]);
+    expect(errorLog.mock.calls.flat().join("")).not.toContain("cozeni_sk_");
+  });
+  it("NEXT_PUBLIC_COZENI_API_KEYは値が空でも、COZENI_API_KEYが無くても、ブラウザへ渡る設定として拒否する", async () => {
+    vi.stubEnv("NEXT_PUBLIC_COZENI_API_KEY", "");
+    api(() => json(state));
+    await expect(getCustomerState({ email: EMAIL })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    vi.stubEnv("COZENI_API_KEY", undefined);
+    await expect(
+      createCheckout({ productId: "prd_1", email: EMAIL }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(errorLog.mock.calls).toEqual([[BROWSER_KEY], [BROWSER_KEY]]);
+  });
+  it("接続先の設定が不正なら通信せずinvalid_inputを投げ、キーをログに出さない", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "staging");
+    api(() => json(state));
+    await expect(getCustomerState({ email: EMAIL })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(errorLog.mock.calls.flat().join("")).not.toContain("cozeni_sk_");
+  });
+  it("APIの失敗はCozeniErrorのcodeとstatusのまま投げる（サンドボックスの宛先違い）", async () => {
+    vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
+    api(() =>
+      json(
+        {
+          error: {
+            code: "sandbox_recipient_not_allowed",
+            message: "失敗",
+            request_id: "req_1",
+          },
+        },
+        422,
+      ),
+    );
+    await expect(
+      createCheckout({ productId: "prd_1", email: "other@example.com" }),
+    ).rejects.toMatchObject({
+      code: "sandbox_recipient_not_allowed",
+      status: 422,
+    });
+    expect(errorLog).not.toHaveBeenCalled();
   });
 });
