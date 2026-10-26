@@ -24,7 +24,7 @@ import {
 import { CliError } from "./errors.js";
 import { CLI } from "./invocation.js";
 import { COMPLETE_WAIT_MS, DEFAULT_POLL_INTERVAL_MS } from "./login.js";
-import type { Flow } from "./store.js";
+import type { Flow, Store } from "./store.js";
 
 const PRODUCT_ID = /^prd_[A-Za-z0-9_-]{1,120}$/;
 /** 決済の確定は Stripe を呼ぶため、通常の管理 API より長く待つ。 */
@@ -36,6 +36,7 @@ const TEST_CARD = "4242 4242 4242 4242";
 export interface TestPurchaseFlags {
   product?: string;
   "site-origin"?: string;
+  refund?: boolean;
 }
 export interface TestPurchaseContext extends CommandContext {
   fetch: typeof globalThis.fetch;
@@ -52,18 +53,13 @@ const invalidSiteOrigin = () =>
 export function assertTestPurchaseAllowed(
   profile: Profile,
   flags: TestPurchaseFlags,
-): { productId: string; site: URL } {
+): { productId: string; site?: URL; refund: boolean } {
   const productId = flags.product;
   if (!productId || !PRODUCT_ID.test(productId))
     throw new CliError(
       "invalid_input",
       "--product には商品ID（prd_ で始まる）を指定してください。",
       { hint: `${CLI} products list で商品IDを確認してください。` },
-    );
-  if (!flags["site-origin"])
-    throw new CliError(
-      "invalid_input",
-      "--site-origin には、開発サーバーのアドレス（例: http://localhost:3000）を指定してください。",
     );
   if (profile.name === "production")
     throw new CliError(
@@ -73,6 +69,9 @@ export function assertTestPurchaseAllowed(
         hint: `テスト購入はサンドボックスだけで行います。既定の接続先が本番のときは、--profile sandbox を付けてください（本番に直接つないでいて、サンドボックスを使わないときは、テスト購入をしていないことを報告に書いてください）。`,
       },
     );
+  // --site-origin は限定ページの商品だけに要る。商品の種類は読んでから決める（testPurchase）。
+  if (flags["site-origin"] === undefined)
+    return { productId, refund: flags.refund === true };
   let site: URL;
   try {
     site = new URL(flags["site-origin"]);
@@ -97,8 +96,12 @@ export function assertTestPurchaseAllowed(
     site.hash
   )
     throw invalidSiteOrigin();
-  return { productId, site };
+  return { productId, site, refund: flags.refund === true };
 }
+
+/** 機能フラグのテスト購入のあと、返金が済むまで残す印（接頭辞 idem- ではないので期限切れの掃除で消えない）。 */
+export const testPurchaseMark = (profileName: string, productId: string) =>
+  `test-purchase-${profileName}-${productId}`.toLowerCase();
 
 function notReady(data: unknown): CliError {
   const error = record(data) && record(data.error) ? data.error : {};
@@ -415,28 +418,50 @@ async function checkUnpurchased(
   return { redirected: true };
 }
 
+// 本番へ進む前に利用者の許可を取る。許可を聞く前に本番のログインを始めない（V-23）。
+const askProduction = (number: number) => [
+  `${number}. 「サンドボックスで確認できたので、本番を導入してよいですか？」と尋ねます（ご自身で試すなら、試し終わってから返事をもらいます）。`,
+  `返事を待ちます。本番への導入を許可されたら、\`${CLI} login --profile production --json\` を実行して本番の承認URLとコードを受け取り、利用者に渡して許可してもらいます（本番にログイン済みで期待するアカウントと一致していれば承認URLは出ません。そのときは \`${CLI} switch --json\` で切り替えます）。`,
+  `承認の返事を待ち、\`${CLI} login --complete --profile production --json\` を実行します。成功すると既定の接続先が本番に切り替わり、次の手順が返ります。`,
+  "許可されなかったら本番へは進まず、テスト用の環境のまま終えます。",
+  "決済画面は操作しません。以後の呼び方は「テスト」です。",
+];
+// サンドボックスの管理画面から始めた導入は、ここで止める（V-19）。本番への切り替えは案内しない。
+const stopAtSandbox = (end: string) => [
+  `${end}本番へは進まず、本番の承認も頼みません。本番で販売するときは、本番の管理画面の導入プロンプトを使うよう案内します。`,
+  "決済画面は操作しません。以後の呼び方は「テスト」です。",
+];
+
 const nextStep = (site: URL, flow: Flow | undefined) => {
   const tried = [
     "1. テスト購入が通ったこと。購入していない状態では限定ページに入れず Cozeni の入場画面へ送られ、テスト購入では限定ページに入れました。確認のあと返金したので、ご自身でも試せます。",
     `2. 「ご自身でも購入から入場まで試せます」。開発サーバー（${site.origin}）の購入ボタンから購入します。テストカードは ${TEST_CARD}（有効期限は未来の日付、CVC は任意の3桁）。メールアドレスはログイン用のメールアドレスで購入し、メールに届くコードを入力すると限定ページに入れます。開発サーバーはこの案内のあいだ動かしたままにします。`,
   ];
-  // サンドボックスの管理画面から始めた導入は、ここで止める（V-19）。本番への切り替えは案内しない。
-  if (flow !== "sandbox-first")
-    return [
-      "利用者に1通で次を伝えます。",
-      ...tried,
-      "テスト購入までで導入は終わりです。本番へは進まず、本番の承認も頼みません。本番で販売するときは、本番の管理画面の導入プロンプトを使うよう案内します。",
-      "決済画面は操作しません。以後の呼び方は「テスト」です。",
-    ].join("\n");
-  // 本番へ進む前に利用者の許可を取る。許可を聞く前に本番のログインを始めない（V-23）。
   return [
     "利用者に1通で次を伝えます。",
     ...tried,
-    "3. 「サンドボックスで確認できたので、本番を導入してよいですか？」と尋ねます（ご自身で試すなら、試し終わってから返事をもらいます）。",
-    `返事を待ちます。本番への導入を許可されたら、\`${CLI} login --profile production --json\` を実行して本番の承認URLとコードを受け取り、利用者に渡して許可してもらいます（本番にログイン済みで期待するアカウントと一致していれば承認URLは出ません。そのときは \`${CLI} switch --json\` で切り替えます）。`,
-    `承認の返事を待ち、\`${CLI} login --complete --profile production --json\` を実行します。成功すると既定の接続先が本番に切り替わり、次の手順が返ります。`,
-    "許可されなかったら本番へは進まず、テスト用の環境のまま終えます。",
-    "決済画面は操作しません。以後の呼び方は「テスト」です。",
+    ...(flow === "sandbox-first"
+      ? askProduction(3)
+      : stopAtSandbox("テスト購入までで導入は終わりです。")),
+  ].join("\n");
+};
+
+/** 機能フラグは返金せずに止め、利用者のアプリでの確認のあとに --refund で返金する。 */
+const featureNextStep = (
+  product: { id: string; name: string },
+  metadata: Record<string, unknown>,
+  flow: Flow | undefined,
+) => {
+  const refund = `${CLI} test-purchase --product ${product.id} --refund --json`;
+  const entries = Object.entries(metadata);
+  return [
+    "利用者に1通で次を伝えます。",
+    `1. テスト購入が通り、機能が付与されました（設定値: ${entries.length === 0 ? "なし" : entries.map(([key, value]) => `${key}=${String(value)}`).join(", ")}）。`,
+    `2. Cozeni にログインしているメールアドレスと同じメールのアカウントでアプリにログインし、「${product.name}」の機能が使えることを確かめてください（サンドボックスでは購入画面を作れるのは利用者本人のメールだけです）。`,
+    `3. 確認の返事を受けたら \`${refund}\` で返金します。返金するまでテスト購入は残ります。`,
+    ...(flow === "sandbox-first"
+      ? askProduction(4)
+      : stopAtSandbox("返金までで導入は終わりです。")),
   ].join("\n");
 };
 
@@ -452,26 +477,83 @@ export function assertNotProductionApi(current: Session): void {
     );
 }
 
+/** 機能フラグのテスト購入を返金し、印を消す。返金済み・対象なしでも成功として扱う。 */
+export async function refundTestPurchase(
+  current: Session,
+  context: TestPurchaseContext,
+  target: { productId: string; store: Store },
+): Promise<Output> {
+  const { productId } = target;
+  const { response, data } = await post(
+    current.send(REQUEST_TIMEOUT_MS),
+    `/products/${encodeURIComponent(productId)}/test-purchase/refund`,
+    current,
+    context,
+  );
+  if (
+    response.status !== 200 ||
+    !record(data) ||
+    (data.status !== "refunded" && data.status !== "nothing_to_refund")
+  )
+    throw response.ok
+      ? new CliError("invalid_response", "返金の応答が想定外です。")
+      : apiFailure(response, data, current, context);
+  await target.store.removePending(
+    testPurchaseMark(current.profile.name, productId),
+  );
+  const refunded = data.status === "refunded";
+  const refundCount =
+    typeof data.refund_count === "number" ? data.refund_count : 0;
+  return {
+    data: {
+      profile: current.profile.name,
+      product_id: productId,
+      refunded,
+      refund_count: refundCount,
+    },
+    human: [
+      refunded
+        ? "テスト購入を返金しました。"
+        : "返金の対象はありませんでした（返金済みです）。",
+    ],
+  };
+}
+
 export async function testPurchase(
   current: Session,
   context: TestPurchaseContext,
-  target: { productId: string; site: URL; flow?: Flow },
+  target: { productId: string; site?: URL; flow?: Flow; store: Store },
 ): Promise<Output> {
-  const { productId, site } = target;
+  const { productId } = target;
   const product = await call(current, context, () =>
     current.client.products.get(productId),
   );
-  let page: PagePath;
-  try {
-    // URLを持たない商品（access_url が null）は空文字で不正なURLとして扱い、下の拒否に流す。
-    const access = new URL(product.access_url ?? "");
-    page = { pathname: access.pathname, search: access.search };
-  } catch {
+  // access_type が無い応答（古いサーバー）は限定ページの商品として扱う。
+  const accessType = product.access_type ?? "page";
+  if (accessType === "file")
     throw new CliError(
-      "invalid_response",
-      "商品の限定ページのURLが想定外です。",
+      "invalid_input",
+      "ファイルの商品は test-purchase で確かめられません。",
     );
-  }
+  const feature = accessType === "feature";
+  const site = target.site;
+  if (!feature && !site)
+    throw new CliError(
+      "invalid_input",
+      "--site-origin には、開発サーバーのアドレス（例: http://localhost:3000）を指定してください。",
+    );
+  let page: PagePath = { pathname: "/", search: "" };
+  if (!feature)
+    try {
+      // URLを持たない商品（access_url が null）は空文字で不正なURLとして扱い、下の拒否に流す。
+      const access = new URL(product.access_url ?? "");
+      page = { pathname: access.pathname, search: access.search };
+    } catch {
+      throw new CliError(
+        "invalid_response",
+        "商品の限定ページのURLが想定外です。",
+      );
+    }
   const base = `/products/${encodeURIComponent(productId)}/test-purchase`;
 
   // 開始。202 のあいだ、login --complete と同じ間隔・最長90秒で打ち直す。
@@ -501,6 +583,7 @@ export async function testPurchase(
   };
   const send = current.send(REQUEST_TIMEOUT_MS);
   let code: string | null = null;
+  let granted: Record<string, unknown> = {};
   for (;;) {
     const { response, data } = await startRequest();
     if (response.status === 202 && record(data) && data.status === "pending") {
@@ -519,13 +602,44 @@ export async function testPurchase(
           "テスト購入の応答が想定外です。",
         );
       code = data.handoff_code;
+      granted = data;
       break;
     }
     if (response.ok)
       throw new CliError("invalid_response", "テスト購入の応答が想定外です。");
     throw apiFailure(response, data, current, context);
   }
-  if (code === null)
+  if (feature) {
+    // 付与された設定値は応答の metadata から読む（古いサーバーは access_type・metadata を返さない）。
+    if (granted.access_type !== "feature" || !record(granted.metadata))
+      throw new CliError(
+        "invalid_response",
+        "テスト購入の応答が機能フラグの形ではありません（接続先のサーバーが古い可能性があります）。",
+      );
+    const metadata = granted.metadata;
+    await target.store.savePending(
+      testPurchaseMark(current.profile.name, productId),
+      {
+        version: 1,
+        product_id: productId,
+        created_at: new Date(context.now()).toISOString(),
+      },
+    );
+    const steps = featureNextStep(product, metadata, target.flow);
+    return {
+      data: {
+        profile: current.profile.name,
+        product_id: productId,
+        access_type: "feature",
+        granted: true,
+        metadata,
+        refunded: false,
+        next_step: steps,
+      },
+      human: ["テスト購入が通り、機能が付与されました。", steps],
+    };
+  }
+  if (code === null || !site)
     throw new CliError(
       "invalid_response",
       "入場の確認に使うコードが返りませんでした（限定ページの無い商品です）。",

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type CliContext, run } from "../src/cli/run.js";
 import { createStore } from "../src/cli/store.js";
+import { fixture } from "./fixtures/external-api-v1.literal.js";
 
 const PROD_API = "https://api.cozeni.net";
 const PROD_APP = "https://cozeni.net";
@@ -558,6 +559,8 @@ describe("test-purchase", () => {
 
   function api(overrides: {
     accessUrl?: string;
+    // 商品の応答を上書きする（機能フラグ・ファイルの商品）。
+    product?: Record<string, unknown>;
     start?: (call: Call) => Response;
     refund?: () => Response;
     site?: Handler;
@@ -571,6 +574,7 @@ describe("test-purchase", () => {
         return json({
           ...product,
           ...(overrides.accessUrl ? { access_url: overrides.accessUrl } : {}),
+          ...overrides.product,
         });
       if (call.url === start)
         return (
@@ -764,13 +768,16 @@ describe("test-purchase", () => {
       expect(code).toBe(0);
     },
   );
-  it("--product と --site-origin は必須", async () => {
-    const t = cli(() => json({}, 500));
+  it("--product は必須で、限定ページの商品は --site-origin も必須", async () => {
+    const t = cli(api({}));
     expect((await t.run("test-purchase", "--json")).code).toBe(2);
+    expect(t.fetch).not.toHaveBeenCalled();
+    // --site-origin は商品の種類で要否が決まるので、限定ページの商品だと商品を読んでから止まる。
     expect(
       (await t.run("test-purchase", "--product", PRODUCT_ID, "--json")).code,
     ).toBe(2);
-    expect(t.fetch).not.toHaveBeenCalled();
+    expect(t.parsed().error.code).toBe("invalid_input");
+    expect(t.calls.some((call) => call.url === start)).toBe(false);
   });
   it("未購入でも限定ページが開いてしまうなら、入場画面へ送られていないと報告し、返金しない", async () => {
     const t = cli(api({ site: site({ open: true }) }));
@@ -969,6 +976,116 @@ describe("test-purchase", () => {
     );
     expect((await t.run(...args)).code).toBe(0);
     expect(t.parsed().data).toMatchObject({ refunded: false, refund_count: 0 });
+  });
+
+  describe("機能フラグの商品", () => {
+    const featureMetadata = { daily_messages: 100, plan: "pro" };
+    const feature = {
+      product: {
+        access_type: "feature",
+        access_url: null,
+        metadata: featureMetadata,
+      },
+    };
+    const featureArgs = ["test-purchase", "--product", PRODUCT_ID, "--json"];
+    const featureStart = () => json(fixture.test_purchase_completed_feature);
+    const markName = `test-purchase-sandbox-${PRODUCT_ID}`;
+    const apiCalls = (t: ReturnType<typeof cli>) =>
+      t.calls.filter((call) => call.url.startsWith(SBX_API));
+
+    it("--site-origin なしで購入し、付与と設定値を返し、返金せず印を残す", async () => {
+      const t = cli(api({ ...feature, start: featureStart }));
+      expect((await t.run(...featureArgs)).code).toBe(0);
+      const data = t.parsed().data;
+      expect(data).toMatchObject({
+        profile: "sandbox",
+        product_id: PRODUCT_ID,
+        access_type: "feature",
+        granted: true,
+        metadata: featureMetadata,
+        refunded: false,
+      });
+      expect(data.next_step).toContain("daily_messages=100, plan=pro");
+      expect(data.next_step).toContain(
+        `npx cozeni test-purchase --product ${PRODUCT_ID} --refund --json`,
+      );
+      // sandbox-first では、返金のあとに本番への許可の問いが続く。
+      expect(data.next_step).toContain("本番を導入してよいですか？");
+      expect(t.calls.some((call) => call.url === refund)).toBe(false);
+      expect(t.calls.some((call) => call.url.startsWith(SITE))).toBe(false);
+      expect(await store().loadPending(markName)).toMatchObject({
+        version: 1,
+        product_id: PRODUCT_ID,
+        created_at: expect.any(String),
+      });
+    });
+    it("completed に access_type が無い（古いサーバー）なら invalid_response で、印を残さない", async () => {
+      const t = cli(
+        api({
+          ...feature,
+          start: () =>
+            json({ status: "completed", handoff_code: null, expires_in: 60 }),
+        }),
+      );
+      expect((await t.run(...featureArgs)).code).not.toBe(0);
+      expect(t.parsed().error.code).toBe("invalid_response");
+      expect(await store().loadPending(markName)).toBeUndefined();
+    });
+    it("--refund は返金だけを呼び、印を消す。nothing_to_refund でも成功", async () => {
+      for (const reply of [
+        { status: "refunded", refund_count: 1 },
+        { status: "nothing_to_refund", refund_count: 0 },
+      ]) {
+        await store().savePending(markName, {
+          version: 1,
+          product_id: PRODUCT_ID,
+          created_at: "2026-10-06T00:00:00.000Z",
+        });
+        const t = cli(api({ ...feature, refund: () => json(reply) }));
+        expect((await t.run(...featureArgs, "--refund")).code).toBe(0);
+        expect(t.parsed().data).toEqual({
+          profile: "sandbox",
+          product_id: PRODUCT_ID,
+          refunded: reply.status === "refunded",
+          refund_count: reply.refund_count,
+        });
+        expect(
+          apiCalls(t).filter((call) => call.method === "POST"),
+        ).toHaveLength(1);
+        expect(apiCalls(t).some((call) => call.url === start)).toBe(false);
+        expect(await store().loadPending(markName)).toBeUndefined();
+      }
+    });
+    it("--refund も本番の API には送らない", async () => {
+      await saveCredential("production");
+      const t = cli(() => json({}, 500));
+      const { code } = await t.run(
+        ...featureArgs,
+        "--refund",
+        "--profile",
+        "production",
+      );
+      expect(code).toBe(2);
+      expect(t.parsed().error.code).toBe("test_purchase_unavailable");
+      expect(t.fetch).not.toHaveBeenCalled();
+    });
+    it("ファイルの商品は API を呼ばずに invalid_input", async () => {
+      const t = cli(
+        api({ product: { access_type: "file", access_url: null } }),
+      );
+      expect((await t.run(...featureArgs)).code).toBe(2);
+      expect(t.parsed().error).toMatchObject({
+        code: "invalid_input",
+        message: "ファイルの商品は test-purchase で確かめられません。",
+      });
+      expect(t.calls.some((call) => call.url === start)).toBe(false);
+    });
+    it("限定ページの商品で --site-origin が無ければ invalid_input", async () => {
+      const t = cli(api({}));
+      expect((await t.run(...featureArgs)).code).toBe(2);
+      expect(t.parsed().error.code).toBe("invalid_input");
+      expect(t.calls.some((call) => call.url === start)).toBe(false);
+    });
   });
 
   describe("外部レビューの指摘", () => {

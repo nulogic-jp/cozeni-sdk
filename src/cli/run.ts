@@ -47,6 +47,7 @@ import {
 import {
   assertNotProductionApi,
   assertTestPurchaseAllowed,
+  refundTestPurchase,
   testPurchase,
 } from "./test-purchase.js";
 
@@ -94,7 +95,7 @@ const commands: Record<string, string[]> = {
   ],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
-  "test-purchase": [...common, "product", "site-origin"],
+  "test-purchase": [...common, "product", "site-origin", "refund"],
   switch: ["json", "help"],
 };
 
@@ -128,6 +129,11 @@ const help = `Cozeni CLI ${version}
                             サンドボックスでテスト購入し、限定ページに入れる
                             ことを確かめて返金する（本番では使えない。
                             --site-origin は localhost・127.0.0.1・[::1] のみ）
+  test-purchase --product <商品ID>
+                            機能フラグの商品のテスト購入。付与を確かめ、返金は
+                            しない（--site-origin は不要）
+  test-purchase --product <商品ID> --refund
+                            機能フラグのテスト購入を返金する
   switch                    本番にログイン済みで期待するアカウントと一致して
                             いれば、既定の接続先を本番に切り替える
 
@@ -184,6 +190,7 @@ type Flags = {
   metadata?: string[];
   product?: string;
   "site-origin"?: string;
+  refund?: boolean;
   help?: boolean;
   version?: boolean;
 };
@@ -210,6 +217,7 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         metadata: { type: "string", multiple: true },
         product: { type: "string" },
         "site-origin": { type: "string" },
+        refund: { type: "boolean" },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean", short: "v" },
       },
@@ -375,19 +383,25 @@ export async function run(context: CliContext): Promise<number> {
       // 本番の拒否は、通信する verifyCreator より先に行う。
       assertNotProductionApi(current);
       await verifyCreator(current, context.now());
+      const testContext = {
+        now: context.now,
+        confirm: async () => {},
+        fetch: context.fetch,
+        sleep: context.sleep,
+      };
       write(
         context,
         json,
-        await testPurchase(
-          current,
-          {
-            now: context.now,
-            confirm: async () => {},
-            fetch: context.fetch,
-            sleep: context.sleep,
-          },
-          { ...target, flow: config.flow },
-        ),
+        target.refund
+          ? await refundTestPurchase(current, testContext, {
+              productId: target.productId,
+              store,
+            })
+          : await testPurchase(current, testContext, {
+              ...target,
+              flow: config.flow,
+              store,
+            }),
       );
       return 0;
     }
