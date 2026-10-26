@@ -1446,6 +1446,46 @@ describe("skill の版", () => {
     expect(skill).toContain("test-purchase");
     expect(skill).toContain("switch");
   });
+  it("skill は機能フラグの前にログインとメールアドレスの本人確認を確かめ、無ければ購入者限定ページで進める", async () => {
+    const skill = await readFile(
+      new URL("../skills/cozeni-setup/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    expect(skill).toContain("ログインのメールアドレスの本人確認");
+    expect(skill).toContain("購入者限定ページで進める");
+    expect(skill).toContain("--feature --metadata");
+    expect(skill).toContain("test_purchase_not_refunded");
+    expect(skill).toContain("--refund");
+    expect(skill).toContain("grep -c '^COZENI_API_KEY=' .env.local");
+    expect(skill).toContain("sandbox_recipient_not_allowed");
+    expect(skill).toContain("NEXT_PUBLIC_");
+    expect(skill).not.toContain(
+      "サイトのコード・`.env`・本番の環境変数にキーを書かない。本番のサイトはキーを使わない。",
+    );
+  });
+  it("nextjs.md と javascript-server.md の機能フラグは、画面とAPIの両方で hasFeatureFlag を呼び、NEXT_PUBLIC_ にしないと書く", async () => {
+    const nextjs = await readFile(
+      new URL("../skills/cozeni-setup/references/nextjs.md", import.meta.url),
+      "utf8",
+    );
+    const section = nextjs.slice(nextjs.indexOf("## 7. 機能フラグ"));
+    expect(section).toContain("createCheckout");
+    expect(section).toContain("hasFeatureFlag");
+    expect(section).toContain("画面と機能の API の両方");
+    expect(section).toContain("NEXT_PUBLIC_");
+    expect(section).toContain("COZENI_ENVIRONMENT=sandbox");
+    expect(section).toContain("403");
+    expect(section).toContain("利用者本人");
+    const server = await readFile(
+      new URL(
+        "../skills/cozeni-setup/references/javascript-server.md",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(server).toContain("## 機能フラグ");
+    expect(server).toContain("hasFeatureFlag");
+  });
   it("売上の受け取り先のテスト登録は、画面ごとのテスト用の操作と導入プロンプトの値で案内する（V-29）", async () => {
     const skill = await readFile(
       new URL("../skills/cozeni-setup/SKILL.md", import.meta.url),
