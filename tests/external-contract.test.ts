@@ -301,6 +301,52 @@ const managementCases = [
     response: link,
     call: (client: Management) => client.checkoutLinks.ensure(product.id),
   },
+  {
+    id: "externalCreateCheckoutSession",
+    status: 201,
+    response: {
+      checkout_id: fixture.checkout_session.checkout_id,
+      url: fixture.checkout_session.url,
+      expires_at: fixture.checkout_session.expires_at,
+    },
+    // SDKはcamelCaseで返すので、契約の応答（snake_case）への写像を戻して比べる。
+    call: async (client: Management) => {
+      const result = await client.createCheckout({
+        productId: fixture.checkout_session_input.product_id,
+        email: fixture.checkout_session_input.email,
+      });
+      return {
+        checkout_id: result.checkoutId,
+        url: result.url,
+        expires_at: result.expiresAt,
+      };
+    },
+  },
+  {
+    id: "externalGetCustomerState",
+    status: 200,
+    response: {
+      customer_id: fixture.customer_state.customer_id,
+      feature_flags: fixture.customer_state.feature_flags.map((flag) => ({
+        ...flag,
+        metadata: { ...flag.metadata },
+      })),
+    },
+    call: async (client: Management) => {
+      const result = await client.getCustomerState({
+        email: fixture.customer_state_input.email,
+      });
+      return {
+        customer_id: result.customerId,
+        feature_flags: result.featureFlags.map((flag) => ({
+          product_id: flag.productId,
+          benefit_id: flag.benefitId,
+          granted_at: flag.grantedAt,
+          metadata: flag.metadata,
+        })),
+      };
+    },
+  },
 ];
 // 契約にあるが、このファイルでは検証しない操作。契約に操作が増えたら、
 // ここに理由付きで足すか、上のケースで検証するまで一覧の一致検査が落ちる。
@@ -311,9 +357,6 @@ const uncoveredOperations = [
   "externalCliLogout",
   "externalStartTestPurchase",
   "externalRefundTestPurchase",
-  // 機能フラグの照会と購入画面の作成。Task A2 で createManagementClient に足して検証する。
-  "externalGetCustomerState",
-  "externalCreateCheckoutSession",
 ];
 describe("正式外部v1契約とSDK", () => {
   it("JSONと型検査用fixtureが一致し、公開型が導入者に返る", () => {

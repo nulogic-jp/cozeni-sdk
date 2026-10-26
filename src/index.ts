@@ -234,15 +234,98 @@ function validPortalUrl(
     return undefined;
   return url;
 }
+const CHECKOUT_PATH = /^\/checkout\/[A-Za-z0-9_-]{1,200}$/;
+/**
+ * 購入画面のURL（`/checkout/{識別子}?checkout={checkout_id}`）の構造検証。
+ * validPortalUrlと同じく、API応答をそのまま購入者へ渡さず構造で縛る。
+ *
+ * - httpsが必須。httpはloopbackだけ許可（開発用）
+ * - userinfo・fragmentを含まない
+ * - pathnameは"/checkout/{識別子}"（英数字・"_"・"-"、200文字まで）
+ * - クエリは"checkout"の1個だけで、値は応答のcheckout_idと完全一致する
+ * - 既知の環境（本番・サンドボックス）につないでいれば、その環境の購入者面のオリジンと一致する
+ *
+ * いずれかに反する場合はundefined（採用しない）。
+ */
+function validCheckoutUrl(
+  value: unknown,
+  expected: { origin?: string; checkoutId: string },
+): URL | undefined {
+  if (typeof value !== "string") return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    (url.protocol !== "https:" &&
+      !(url.protocol === "http:" && isLoopback(url))) ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    !CHECKOUT_PATH.test(url.pathname) ||
+    (expected.origin !== undefined && url.origin !== expected.origin) ||
+    [...url.searchParams.keys()].length !== 1 ||
+    url.searchParams.get("checkout") !== expected.checkoutId
+  )
+    return undefined;
+  return url;
+}
 function identifier(id: string): string {
   if (!id || id.length > 200 || id === "." || id === "..")
     throw new CozeniError("invalid_input");
   return encodeURIComponent(id);
 }
+function emailInput(email: string): string {
+  // 形式の検査はAPI側で行う。明らかな誤りだけ送信前に止める。
+  if (typeof email !== "string" || !email.trim() || email.length > 254)
+    throw new CozeniError("invalid_input");
+  return email;
+}
+function metadataValue(value: unknown): FeatureFlagMetadata | undefined {
+  if (!record(value)) return;
+  for (const item of Object.values(value))
+    if (
+      typeof item !== "string" &&
+      typeof item !== "boolean" &&
+      !(typeof item === "number" && Number.isFinite(item))
+    )
+      return;
+  return value as FeatureFlagMetadata;
+}
+function customerState(data: unknown, status: number): CustomerState {
+  if (
+    !record(data) ||
+    (data.customer_id !== null && typeof data.customer_id !== "string") ||
+    !Array.isArray(data.feature_flags)
+  )
+    throw new CozeniError("invalid_response", status);
+  const featureFlags = data.feature_flags.map((flag: unknown) => {
+    const metadata = record(flag) ? metadataValue(flag.metadata) : undefined;
+    if (
+      !record(flag) ||
+      typeof flag.product_id !== "string" ||
+      typeof flag.benefit_id !== "string" ||
+      typeof flag.granted_at !== "string" ||
+      !metadata
+    )
+      throw new CozeniError("invalid_response", status);
+    return {
+      productId: flag.product_id,
+      benefitId: flag.benefit_id,
+      grantedAt: flag.granted_at,
+      metadata,
+    };
+  });
+  return { customerId: data.customer_id, featureFlags };
+}
 export function createManagementClient(options: ManagementClientOptions) {
   if (!options.apiKey || /\s/.test(options.apiKey))
     throw new CozeniError("invalid_input");
   const send = transport(options, options.apiKey);
+  // 購入画面のURLを照合する購入者面のオリジン（既知の環境のときだけ）。
+  const checkoutOrigin = knownCheckoutOrigin(resolveApiOrigin(options));
   async function request<T>(
     path: string,
     method: string,
@@ -254,6 +337,19 @@ export function createManagementClient(options: ManagementClientOptions) {
     if (!record(data))
       throw new CozeniError("invalid_response", response.status);
     return data as T;
+  }
+  async function getCustomerState(input: {
+    email: string;
+  }): Promise<CustomerState> {
+    const email = emailInput(input?.email);
+    // メールアドレスはURLに載せない（アクセスログに残さない）ので本文で送る。
+    const { response, data } = await send("/customers/state", "POST", {
+      email,
+    });
+    if (!response.ok) throw failure(response, data);
+    if (response.status !== 200)
+      throw new CozeniError("invalid_response", response.status);
+    return customerState(data, response.status);
   }
   return {
     account: { get: () => request<Account>("/account", "GET") },
@@ -309,6 +405,57 @@ export function createManagementClient(options: ManagementClientOptions) {
           `/products/${identifier(productId)}/checkout-link`,
           "PUT",
         ),
+    },
+    // ログイン中のユーザーのメールアドレスを固定した購入画面を作る。
+    // URLは購入者本人にだけ渡す。有効期限は30分で、過ぎたら作り直す。
+    async createCheckout(input: {
+      productId: string;
+      email: string;
+    }): Promise<{ checkoutId: string; url: string; expiresAt: string }> {
+      if (
+        typeof input?.productId !== "string" ||
+        !input.productId ||
+        input.productId.length > 200
+      )
+        throw new CozeniError("invalid_input");
+      const email = emailInput(input.email);
+      const { response, data } = await send("/checkout/sessions", "POST", {
+        product_id: input.productId,
+        email,
+      });
+      if (!response.ok) throw failure(response, data);
+      if (
+        response.status !== 201 ||
+        !record(data) ||
+        typeof data.checkout_id !== "string" ||
+        typeof data.expires_at !== "string"
+      )
+        throw new CozeniError("invalid_response", response.status);
+      const url = validCheckoutUrl(data.url, {
+        origin: checkoutOrigin,
+        checkoutId: data.checkout_id,
+      });
+      if (!url) throw new CozeniError("invalid_response", response.status);
+      return {
+        checkoutId: data.checkout_id,
+        url: url.href,
+        expiresAt: data.expires_at,
+      };
+    },
+    getCustomerState,
+    // 購入者がその商品の機能フラグを持つか。無ければ { granted: false, metadata: {} }。
+    // 照会の失敗（認証・レート制限・通信など）は握りつぶさず投げる。
+    async hasFeatureFlag(input: {
+      email: string;
+      productId: string;
+    }): Promise<{ granted: boolean; metadata: FeatureFlagMetadata }> {
+      const state = await getCustomerState({ email: input?.email });
+      const flag = state.featureFlags.find(
+        (item) => item.productId === input.productId,
+      );
+      return flag
+        ? { granted: true, metadata: flag.metadata }
+        : { granted: false, metadata: {} };
     },
   };
 }

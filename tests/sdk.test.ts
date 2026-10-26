@@ -655,6 +655,303 @@ describe("購入者ポータルへのリンク（createPortalLink）", () => {
     }
   });
 });
+describe("機能フラグ（購入画面の作成・購入者の照会）", () => {
+  const email = "hanako@example.com";
+  const flag = {
+    product_id: "prd_feature",
+    benefit_id: "ben_1",
+    granted_at: "2026-10-23T03:00:00.000Z",
+    metadata: { daily_messages: 100, plan: "pro", beta: true },
+  };
+  const state = { customer_id: "cus_1", feature_flags: [flag] };
+  const empty = { customer_id: null, feature_flags: [] };
+  const checkoutUrl = "https://checkout.example/checkout/a?checkout=chk_1";
+  const checkoutBody = (url: unknown = checkoutUrl) => ({
+    checkout_id: "chk_1",
+    url,
+    expires_at: "2026-10-26T03:30:00.000Z",
+  });
+  const managementClient = (fetch: typeof globalThis.fetch) =>
+    createManagementClient({ apiOrigin, apiKey: "secret", fetch });
+  const failureBody = (code: string) => ({
+    error: { code, message: "失敗", request_id: "req_1" },
+  });
+
+  it("createCheckoutは固定の経路へ本文でPOSTし、201をcamelCaseで返す", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(checkoutBody(), 201));
+    const result = await managementClient(fetch).createCheckout({
+      productId: "prd_1",
+      email,
+    });
+    expect(result).toEqual({
+      checkoutId: "chk_1",
+      url: checkoutUrl,
+      expiresAt: "2026-10-26T03:30:00.000Z",
+    });
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(`${apiOrigin}/external/v1/checkout/sessions`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ product_id: "prd_1", email });
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      "Bearer secret",
+    );
+    expect(init).toMatchObject({
+      cache: "no-store",
+      redirect: "manual",
+      credentials: "omit",
+    });
+  });
+  it("createCheckoutは409 already_purchasedをCozeniErrorで返す", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(ok(failureBody("already_purchased"), 409));
+    const error = await managementClient(fetch)
+      .createCheckout({ productId: "prd_1", email })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CozeniError);
+    expect(error).toMatchObject({
+      code: "already_purchased",
+      status: 409,
+      requestId: "req_1",
+    });
+    expect(String(error)).not.toContain(email);
+  });
+  it.each([
+    [409, "creator_not_ready"],
+    [422, "sandbox_recipient_not_allowed"],
+    [403, "terms_consent_required"],
+  ])(
+    "追加のエラーコード %s %s を未知コードに丸めない",
+    async (status, code) => {
+      const fetch = vi.fn().mockResolvedValue(ok(failureBody(code), status));
+      await expect(
+        managementClient(fetch).createCheckout({ productId: "prd_1", email }),
+      ).rejects.toMatchObject({ code, status });
+    },
+  );
+  it("createCheckoutは422 sandbox_recipient_not_allowedをそのcodeで投げる", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(ok(failureBody("sandbox_recipient_not_allowed"), 422));
+    await expect(
+      managementClient(fetch).createCheckout({
+        productId: "prd_1",
+        email: "a@example.com",
+      }),
+    ).rejects.toMatchObject({
+      code: "sandbox_recipient_not_allowed",
+      status: 422,
+    });
+  });
+  it.each([
+    { productId: "", email },
+    { productId: "prd_1", email: "" },
+    { productId: "prd_1", email: " " },
+    { productId: "prd_1", email: `${"a".repeat(250)}@example.com` },
+  ])("createCheckoutは不正な入力を送信前に拒否する %#", async (input) => {
+    const fetch = vi.fn();
+    await expect(managementClient(fetch).createCheckout(input)).rejects.toThrow(
+      CozeniError,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("createCheckoutは契約外の応答をinvalid_responseにする", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok({ checkout_id: "chk_1" }, 201));
+    await expect(
+      managementClient(fetch).createCheckout({ productId: "prd_1", email }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+  });
+  it("createCheckoutは201以外の成功応答をinvalid_responseにする", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(checkoutBody(), 200));
+    await expect(
+      managementClient(fetch).createCheckout({ productId: "prd_1", email }),
+    ).rejects.toMatchObject({ code: "invalid_response", status: 200 });
+  });
+  it("createCheckoutはcheckout以外のURL（別オリジン・別パス・クエリ違い）をinvalid_responseにする", async () => {
+    const accepted = [
+      checkoutUrl,
+      "http://localhost:5173/checkout/a_B-9?checkout=chk_1",
+    ];
+    const rejected: unknown[] = [
+      // httpはloopbackだけ許可する。
+      "http://checkout.example/checkout/a?checkout=chk_1",
+      "javascript:alert(1)",
+      "/checkout/a?checkout=chk_1",
+      "https://user:pass@checkout.example/checkout/a?checkout=chk_1",
+      // 別パス
+      "https://checkout.example/enter?checkout=chk_1",
+      "https://checkout.example/checkout?checkout=chk_1",
+      "https://checkout.example/checkout/a/b?checkout=chk_1",
+      "https://checkout.example/checkout/a.b?checkout=chk_1",
+      `https://checkout.example/checkout/${"a".repeat(201)}?checkout=chk_1`,
+      // クエリ違い
+      "https://checkout.example/checkout/a",
+      "https://checkout.example/checkout/a?checkout=chk_other",
+      "https://checkout.example/checkout/a?checkout=",
+      "https://checkout.example/checkout/a?other=chk_1",
+      "https://checkout.example/checkout/a?checkout=chk_1&next=https://evil.example",
+      "https://checkout.example/checkout/a?checkout=chk_1&checkout=chk_1",
+      "https://checkout.example/checkout/a?checkout=chk_1#top",
+      42,
+    ];
+    for (const url of accepted) {
+      const fetch = vi.fn().mockResolvedValue(ok(checkoutBody(url), 201));
+      await expect(
+        managementClient(fetch).createCheckout({ productId: "prd_1", email }),
+        String(url),
+      ).resolves.toMatchObject({ url });
+    }
+    for (const url of rejected) {
+      const fetch = vi.fn().mockResolvedValue(ok(checkoutBody(url), 201));
+      await expect(
+        managementClient(fetch).createCheckout({ productId: "prd_1", email }),
+        String(url),
+      ).rejects.toMatchObject({ code: "invalid_response", status: 201 });
+    }
+  });
+  it.each([
+    ["production", "https://checkout.cozeni.net"],
+    ["sandbox", "https://checkout-sandbox.cozeni.net"],
+  ] as const)(
+    "createCheckoutは既知の環境(%s)では購入者面のオリジン以外のURLを返さない",
+    async (environment, checkout) => {
+      const url = (origin: string) => `${origin}/checkout/a?checkout=chk_1`;
+      const call = (value: string) =>
+        createManagementClient({
+          environment,
+          apiKey: "secret",
+          fetch: vi.fn().mockResolvedValue(ok(checkoutBody(value), 201)),
+        }).createCheckout({ productId: "prd_1", email });
+      await expect(call(url(checkout))).resolves.toMatchObject({
+        url: url(checkout),
+      });
+      for (const other of [
+        "https://evil.example",
+        environment === "production"
+          ? "https://checkout-sandbox.cozeni.net"
+          : "https://checkout.cozeni.net",
+      ])
+        await expect(call(url(other))).rejects.toMatchObject({
+          code: "invalid_response",
+        });
+    },
+  );
+
+  it("getCustomerStateはメールを本文で送り、URLに載せない", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(state));
+    const result = await managementClient(fetch).getCustomerState({ email });
+    expect(result).toEqual({
+      customerId: "cus_1",
+      featureFlags: [
+        {
+          productId: "prd_feature",
+          benefitId: "ben_1",
+          grantedAt: "2026-10-23T03:00:00.000Z",
+          metadata: { daily_messages: 100, plan: "pro", beta: true },
+        },
+      ],
+    });
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(`${apiOrigin}/external/v1/customers/state`);
+    expect(String(url)).not.toContain("hanako");
+    expect(String(url)).not.toContain(encodeURIComponent(email));
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ email });
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      "Bearer secret",
+    );
+    expect(init).toMatchObject({
+      cache: "no-store",
+      redirect: "manual",
+      credentials: "omit",
+    });
+  });
+  it("購入者・権利が無い200（customer_id: null）をそのまま返す", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(empty));
+    expect(await managementClient(fetch).getCustomerState({ email })).toEqual({
+      customerId: null,
+      featureFlags: [],
+    });
+  });
+  it("getCustomerStateは429でretryAfterSecondsを返し、自動再送しない", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(failureBody("rate_limited")), {
+        status: 429,
+        headers: { "Retry-After": "7" },
+      }),
+    );
+    const error = await managementClient(fetch)
+      .getCustomerState({ email })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "rate_limited",
+      status: 429,
+      retryAfterSeconds: 7,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ok({ customer_id: "cus_1" }),
+    ok({ customer_id: 1, feature_flags: [] }),
+    ok({ customer_id: "cus_1", feature_flags: [{ product_id: "p" }] }),
+    ok({
+      customer_id: "cus_1",
+      feature_flags: [{ ...flag, metadata: { url: { nested: true } } }],
+    }),
+    ok({ ...state }, 202),
+  ])(
+    "getCustomerStateは契約外の応答をinvalid_responseにする %#",
+    async (response) => {
+      const fetch = vi.fn().mockResolvedValue(response);
+      await expect(
+        managementClient(fetch).getCustomerState({ email }),
+      ).rejects.toMatchObject({ code: "invalid_response" });
+    },
+  );
+  it("getCustomerStateは空のメールを送信前に拒否する", async () => {
+    const fetch = vi.fn();
+    await expect(
+      managementClient(fetch).getCustomerState({ email: "" }),
+    ).rejects.toThrow(CozeniError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("hasFeatureFlagは該当商品があれば付与済みと設定値を返す", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(state));
+    expect(
+      await managementClient(fetch).hasFeatureFlag({
+        email,
+        productId: "prd_feature",
+      }),
+    ).toEqual({
+      granted: true,
+      metadata: { daily_messages: 100, plan: "pro", beta: true },
+    });
+  });
+  it.each([
+    ["別の商品だけが付与されている", state, "prd_other"],
+    ["購入者・権利が無い", empty, "prd_feature"],
+  ])(
+    "hasFeatureFlagは%s場合、granted: falseと空の設定値を返す",
+    async (_label, body, productId) => {
+      const fetch = vi.fn().mockResolvedValue(ok(body));
+      expect(
+        await managementClient(fetch).hasFeatureFlag({ email, productId }),
+      ).toEqual({ granted: false, metadata: {} });
+    },
+  );
+  it("hasFeatureFlagは照会の失敗を握りつぶさず投げる", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(ok(failureBody("unavailable"), 503));
+    await expect(
+      managementClient(fetch).hasFeatureFlag({
+        email,
+        productId: "prd_feature",
+      }),
+    ).rejects.toMatchObject({ code: "unavailable", status: 503 });
+  });
+});
 describe("接続する環境", () => {
   const checked = async (
     options: Parameters<typeof createCustomerClient>[0],
