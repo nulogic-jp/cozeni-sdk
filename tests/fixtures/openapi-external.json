@@ -249,6 +249,126 @@
         "required": ["device_code"],
         "additionalProperties": false
       },
+      "ExternalCustomerState": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "この販売者の購入者の ID。機能フラグの権利が1件以上あるときだけ返す。無ければ null（購入者の有無・購入済みかどうかの判定には使えない）。"
+          },
+          "feature_flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExternalFeatureFlag"
+            },
+            "description": "付与済み（剥奪されていない）の機能フラグ。特典ごとに1件。付与日時の昇順。購入者限定ページの権利は含まない。"
+          }
+        },
+        "required": ["customer_id", "feature_flags"],
+        "additionalProperties": false
+      },
+      "ExternalFeatureFlag": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          },
+          "benefit_id": {
+            "type": "string"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "権利が最初に付与された日時。同じ特典を複数回購入していれば最も古いもの。"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ExternalFeatureFlagMetadata"
+          }
+        },
+        "required": ["product_id", "benefit_id", "granted_at", "metadata"],
+        "additionalProperties": false
+      },
+      "ExternalFeatureFlagMetadata": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "description": "機能フラグの設定値。50件まで。キーは1〜40字の英数字・_・-（__proto__ は不可）。値は文字列（1〜500字）・数値・真偽値。URLやAPIキーなどの秘匿情報は入れない。",
+        "example": {
+          "daily_messages": 100,
+          "plan": "pro",
+          "beta": true
+        }
+      },
+      "ExternalCustomerStateInput": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "hanako@example.com",
+            "description": "購入者のメールアドレス。前後の空白を除き、大文字小文字を区別せずに照合する。URL には載せない（POST）。"
+          }
+        },
+        "required": ["email"],
+        "additionalProperties": false
+      },
+      "ExternalCheckoutSession": {
+        "type": "object",
+        "properties": {
+          "checkout_id": {
+            "type": "string",
+            "description": "購入試行の ID。"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "購入画面の URL（`?checkout=<checkout_id>` 付き）。購入者をこの URL へ進める。メールアドレスは含まない。"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "購入画面の有効期限（作成から30分）。過ぎたら作り直す。"
+          }
+        },
+        "required": ["checkout_id", "url", "expires_at"],
+        "additionalProperties": false
+      },
+      "ExternalCheckoutSessionInput": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "example": "prd_0123456789abcdef0123456789abcdef",
+            "description": "販売する商品の ID。自分の商品で、標準の購入リンクがあるもの。"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "hanako@example.com",
+            "description": "購入者のメールアドレス（販売者のアプリでログイン中のユーザーのもの）。前後の空白を除き、小文字にそろえて保存する。購入画面では変更できない。URL には載せない（POST）。"
+          }
+        },
+        "required": ["product_id", "email"],
+        "additionalProperties": false
+      },
       "ExternalAccount": {
         "type": "object",
         "properties": {
@@ -266,7 +386,9 @@
                 "products:read",
                 "products:write",
                 "checkout_links:read",
-                "checkout_links:write"
+                "checkout_links:write",
+                "checkouts:write",
+                "customers:read"
               ]
             }
           },
@@ -409,7 +531,15 @@
             "enum": ["jpy"]
           },
           "access_url": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "access_type": {
+            "type": "string",
+            "enum": ["page", "feature", "file"]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ExternalFeatureFlagMetadata"
           },
           "description": {
             "type": "string",
@@ -440,6 +570,8 @@
           "price_jpy",
           "currency",
           "access_url",
+          "access_type",
+          "metadata",
           "description",
           "images",
           "status",
@@ -469,6 +601,24 @@
         "additionalProperties": false
       },
       "ExternalCreateProduct": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ExternalCreatePageProduct"
+          },
+          {
+            "$ref": "#/components/schemas/ExternalCreateFeatureProduct"
+          }
+        ],
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ExternalCreatePageProduct"
+          },
+          {
+            "$ref": "#/components/schemas/ExternalCreateFeatureProduct"
+          }
+        ]
+      },
+      "ExternalCreatePageProduct": {
         "type": "object",
         "properties": {
           "name": {
@@ -481,6 +631,11 @@
             "minimum": 50,
             "maximum": 9999999
           },
+          "access_type": {
+            "type": "string",
+            "enum": ["page"],
+            "description": "購入者限定ページ。省略時もこの種類。access_url が必須で、metadata は送れない。"
+          },
           "access_url": {
             "type": "string",
             "format": "uri"
@@ -492,6 +647,36 @@
           }
         },
         "required": ["name", "price_jpy", "access_url"],
+        "additionalProperties": false
+      },
+      "ExternalCreateFeatureProduct": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "price_jpy": {
+            "type": "integer",
+            "minimum": 50,
+            "maximum": 9999999
+          },
+          "access_type": {
+            "type": "string",
+            "enum": ["feature"],
+            "description": "機能フラグ。access_url は送れない。metadata は任意（省略時は {}）。作成後に変えられない。"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ExternalFeatureFlagMetadata"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Markdown。前後の空白を除いたコードポイント数で4000字まで。null・空白だけなら説明なし。"
+          }
+        },
+        "required": ["name", "price_jpy", "access_type"],
         "additionalProperties": false
       },
       "ExternalUpdateProduct": {
@@ -510,6 +695,16 @@
           "access_url": {
             "type": "string",
             "format": "uri"
+          },
+          "metadata": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalFeatureFlagMetadata"
+              },
+              {
+                "description": "機能フラグの商品だけ。全置換（`{}` で全消去、省略で変更なし）。購入者限定ページの商品に送ると400。"
+              }
+            ]
           },
           "description": {
             "type": "string",
@@ -968,6 +1163,232 @@
         }
       }
     },
+    "/customers/state": {
+      "post": {
+        "operationId": "externalGetCustomerState",
+        "tags": ["購入者"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "summary": "購入者の機能フラグを照会する",
+        "description": "必要なスコープ: customers:read。購入者のメールアドレスで、付与済みの機能フラグと設定値を返す。購入者がいない・機能フラグの権利が無いときも 200（customer_id: null・feature_flags: []）。同じ購入者の結果は最大60秒キャッシュしてよい。購入直後は反映まで数秒かかることがあるので、見つからなければ数秒おきに数回照会し直す。ログインのメールアドレスの本人確認は販売者のアプリで済ませること。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalCustomerStateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "購入者の ID と機能フラグ。機能フラグの権利が1件以上あるときだけ customer_id を返す。無ければ customer_id: null・空配列。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCustomerState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。メール形式の誤り・未知フィールド・JSON でない本文。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。customers:read が必要。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。この API だけの別枠（キー・販売者・IP）。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。DB の障害を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/checkout/sessions": {
+      "post": {
+        "operationId": "externalCreateCheckoutSession",
+        "tags": ["購入画面"],
+        "security": [
+          {
+            "CreatorApiKey": []
+          }
+        ],
+        "summary": "メールアドレスを固定した購入画面を作る",
+        "description": "必要なスコープ: checkouts:write。販売者のサーバーが、ログイン中のユーザーのメールアドレスで購入試行を作り、購入画面の URL を返す。購入画面ではメールアドレスを変更できず、照会 API（POST /customers/state）で引くメールアドレスとの食い違いを防ぐ。商品の種類（機能フラグ・購入者限定ページ）は問わない。そのメールアドレスがすでに購入済みで、購入制限に達しているときは 409 already_purchased（作らない）。有効期限は30分。URL には購入者のメールアドレスが紐づくので、ログイン中の本人にだけ渡す。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalCheckoutSessionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "購入試行の ID・購入画面の URL・有効期限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCheckoutSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input。メール形式の誤り・product_id なし・未知フィールド・JSON でない本文。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized。失効、期限切れ、環境違いを含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope。checkouts:write が必要。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "product_not_found。他の販売者の商品・存在しない商品・標準リンクが無い商品。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "creator_not_ready（審査未承認・Stripe 未接続）または already_purchased（購入済みで購入制限に達している）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "product_archived（アーカイブ済み・未公開）または checkout_link_disabled（標準リンクが無効）。既存の購入画面と同じ。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "sandbox_recipient_not_allowed。サンドボックスで、販売者本人のログイン用メールアドレス以外を指定した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited。管理 API と同じ枠（キー・販売者・IP）。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "再試行までの秒数。"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal。DB の障害を含む。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/account": {
       "get": {
         "operationId": "externalGetAccount",
@@ -1009,7 +1430,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1143,7 +1564,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1277,7 +1698,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1401,7 +1822,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1533,7 +1954,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1667,7 +2088,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1809,7 +2230,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1933,7 +2354,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2065,7 +2486,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2199,7 +2620,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2340,7 +2761,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope。またはterms_consent_required（規約改定後に未同意。管理画面にログインして同意すると解除。未同意ならスコープ不足より先にこちらが返る）。",
+            "description": "insufficient_scope。",
             "content": {
               "application/json": {
                 "schema": {

@@ -41,6 +41,8 @@
     "price_jpy": 3000,
     "currency": "jpy",
     "access_url": "https://creator.example/members",
+    "access_type": "page",
+    "metadata": {},
     "description": "## 内容\n\n- 全40ページのPDF\n- 配色の実例120点",
     "images": [
       {
@@ -53,6 +55,53 @@
     "status": "active",
     "created_at": "2026-09-16T00:00:00.000Z",
     "updated_at": "2026-09-16T00:00:00.000Z"
+  },
+  "create_feature_product": {
+    "name": "AIチャット Pro プラン",
+    "price_jpy": 980,
+    "access_type": "feature",
+    "metadata": { "daily_messages": 100, "plan": "pro", "beta": true }
+  },
+  "feature_product": {
+    "id": "prd_fedcba9876543210fedcba9876543210",
+    "name": "AIチャット Pro プラン",
+    "price_jpy": 980,
+    "currency": "jpy",
+    "access_url": null,
+    "access_type": "feature",
+    "metadata": { "daily_messages": 100, "plan": "pro", "beta": true },
+    "description": null,
+    "images": [],
+    "status": "active",
+    "created_at": "2026-09-16T00:00:00.000Z",
+    "updated_at": "2026-09-16T00:00:00.000Z"
+  },
+  "customer_state_input": {
+    "email": "hanako@example.com"
+  },
+  "customer_state": {
+    "customer_id": "cus_0123456789abcdef0123456789abcdef",
+    "feature_flags": [
+      {
+        "product_id": "prd_fedcba9876543210fedcba9876543210",
+        "benefit_id": "ben_0123456789abcdef0123456789abcdef",
+        "granted_at": "2026-10-23T03:00:00.000Z",
+        "metadata": { "daily_messages": 100, "plan": "pro", "beta": true }
+      }
+    ]
+  },
+  "customer_state_empty": {
+    "customer_id": null,
+    "feature_flags": []
+  },
+  "checkout_session_input": {
+    "product_id": "prd_0123456789abcdef0123456789abcdef",
+    "email": "hanako@example.com"
+  },
+  "checkout_session": {
+    "checkout_id": "chk_0123456789abcdef0123456789abcdef",
+    "url": "https://checkout.example/checkout/example?checkout=chk_0123456789abcdef0123456789abcdef",
+    "expires_at": "2026-10-26T03:30:00.000Z"
   },
   "checkout_link": {
     "id": "lnk_example",

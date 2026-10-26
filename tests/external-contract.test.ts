@@ -1,16 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  type AccessType,
   type Account,
   type CheckoutLink,
   CozeniError,
   type CreateProduct,
+  type CustomerState,
   createCustomerClient,
   createManagementClient,
   type Entitlement,
+  type FeatureFlagMetadata,
   type Product,
   type ProductImage,
   type ProductList,
+  type Scope,
   type UpdateProduct,
 } from "../src/index.js";
 import { fixture } from "./fixtures/external-api-v1.literal.js";
@@ -307,6 +311,9 @@ const uncoveredOperations = [
   "externalCliLogout",
   "externalStartTestPurchase",
   "externalRefundTestPurchase",
+  // 機能フラグの照会と購入画面の作成。Task A2 で createManagementClient に足して検証する。
+  "externalGetCustomerState",
+  "externalCreateCheckoutSession",
 ];
 describe("正式外部v1契約とSDK", () => {
   it("JSONと型検査用fixtureが一致し、公開型が導入者に返る", () => {
@@ -595,4 +602,67 @@ describe("正式外部v1契約とSDK", () => {
       ).rejects.toBeInstanceOf(CozeniError);
     },
   );
+});
+
+describe("機能フラグの外部契約とSDK", () => {
+  it("機能フラグ・ファイルの商品（access_url: null）が型と契約に合う", () => {
+    // as constのimagesはreadonlyタプルなので、公開型（可変配列）へ複製して型検査する。
+    const featureProduct = {
+      ...fixture.feature_product,
+      images: [...fixture.feature_product.images],
+    } satisfies Product;
+    expect(featureProduct.access_type).toBe("feature");
+    expect(featureProduct.access_url).toBeNull();
+    expectTypeOf<Product["access_url"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<Product["access_type"]>().toEqualTypeOf<AccessType>();
+    expectTypeOf<AccessType>().toEqualTypeOf<"page" | "feature" | "file">();
+    expectTypeOf<Product["metadata"]>().toEqualTypeOf<FeatureFlagMetadata>();
+  });
+  it("作成の型は page 形と feature 形だけを受け付ける", () => {
+    const page = fixture.create_product satisfies CreateProduct;
+    const feature = fixture.create_feature_product satisfies CreateProduct;
+    // @ts-expect-error feature 形に access_url は書けない
+    const mixed: CreateProduct = {
+      ...feature,
+      access_url: "https://example.com",
+    };
+    // @ts-expect-error page 形に metadata は書けない
+    const pageWithMetadata: CreateProduct = { ...page, metadata: { a: 1 } };
+    const file: CreateProduct = {
+      name: "資料",
+      price_jpy: 100,
+      // @ts-expect-error file は作成の入力に使えない
+      access_type: "file",
+    };
+    expect([page, feature, mixed, pageWithMetadata, file]).toHaveLength(5);
+  });
+  it("更新の型は access_type を送れず、metadata・description を受け付ける", () => {
+    const body = {
+      metadata: { plan: "pro" },
+      description: null,
+    } satisfies UpdateProduct;
+    // @ts-expect-error access_type は作成後に変えられない
+    const typeChange: UpdateProduct = { access_type: "feature" };
+    expect([body, typeChange]).toHaveLength(2);
+  });
+  it("スコープに customers:read・checkouts:write がある", () => {
+    const scopes = [
+      "customers:read",
+      "checkouts:write",
+    ] as const satisfies readonly Scope[];
+    expect(scopes).toHaveLength(2);
+  });
+  it("購入者の状態の型が契約の例（camelCase）と合う", () => {
+    const state = {
+      customerId: fixture.customer_state.customer_id,
+      featureFlags: fixture.customer_state.feature_flags.map((flag) => ({
+        productId: flag.product_id,
+        benefitId: flag.benefit_id,
+        grantedAt: flag.granted_at,
+        metadata: { ...flag.metadata },
+      })),
+    } satisfies CustomerState;
+    expect(state.featureFlags).toHaveLength(1);
+    expectTypeOf<CustomerState["customerId"]>().toEqualTypeOf<string | null>();
+  });
 });

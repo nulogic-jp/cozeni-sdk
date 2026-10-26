@@ -22,7 +22,9 @@ export type Scope =
   | "products:read"
   | "products:write"
   | "checkout_links:read"
-  | "checkout_links:write";
+  | "checkout_links:write"
+  | "customers:read"
+  | "checkouts:write";
 export type SalesRejectionReasonCode =
   | "tokushoho_missing_contact"
   | "tokushoho_unreachable"
@@ -64,26 +66,58 @@ export interface Account {
   // 旧バージョンのAPIはsalesを返さないため任意項目にする。
   sales?: AccountSales;
 }
-export interface CreateProduct {
-  name: string;
-  price_jpy: number;
-  access_url: string;
-  // Markdown。前後の空白を除いて4000コードポイントまで。null・空白だけなら説明なし。
-  // 長さはSDKでは検証せず、サーバーの判定（invalid_input）に任せる。
+// 機能フラグの設定値。件数・キー・値の制約はAPI側で検証する。秘匿情報は入れない。
+export type FeatureFlagMetadata = Record<string, string | number | boolean>;
+// 商品の種類。作成できるのは page と feature で、file は応答にだけ現れる。
+export type AccessType = "page" | "feature" | "file";
+// 作成の入力は access_type で2形に分かれる（API契約のoneOfと同じ）。
+export type CreateProduct =
+  | {
+      name: string;
+      price_jpy: number;
+      access_type?: "page";
+      access_url: string;
+      // 型で混ぜ書きを止める（API側も400）。
+      metadata?: never;
+      // Markdown。前後の空白を除いて4000コードポイントまで。null・空白だけなら説明なし。
+      // 長さはSDKでは検証せず、サーバーの判定（invalid_input）に任せる。
+      description?: string | null;
+    }
+  | {
+      name: string;
+      price_jpy: number;
+      access_type: "feature";
+      metadata?: FeatureFlagMetadata;
+      access_url?: never;
+      description?: string | null;
+    };
+// Partial<CreateProduct> はunionのPartialになりAPIが受け付ける形と違うので明示する。
+// access_type は作成後に変えられないので送れない。
+export interface UpdateProduct {
+  name?: string;
+  price_jpy?: number;
+  access_url?: string;
+  metadata?: FeatureFlagMetadata;
   description?: string | null;
 }
-export type UpdateProduct = Partial<CreateProduct>;
 export interface ProductImage {
   id: string;
   url: string;
   content_type: string;
   size_bytes: number;
 }
-export interface Product extends Omit<CreateProduct, "description"> {
+// unionのCreateProductはextendsできないので、応答の形を別に持つ。
+// URLを持たない商品（feature・file）の access_url は null。判定には access_type を使う。
+export interface Product {
   id: string;
+  name: string;
+  price_jpy: number;
+  currency: "jpy";
+  access_type: AccessType;
+  access_url: string | null;
+  metadata: FeatureFlagMetadata;
   description: string | null;
   images: ProductImage[];
-  currency: "jpy";
   status: "active" | "archived";
   created_at: string;
   updated_at: string;
@@ -109,6 +143,16 @@ export type Entitlement =
       enterUrl?: string;
     }
   | { entitled: false; reason: "unavailable" };
+export interface CustomerState {
+  // 機能フラグの権利が1件以上あるときだけ返る。無ければ null。
+  customerId: string | null;
+  featureFlags: {
+    productId: string;
+    benefitId: string;
+    grantedAt: string;
+    metadata: FeatureFlagMetadata;
+  }[];
+}
 
 /**
  * enter_url の構造検証。API応答の取り込み時（checkEntitlement）と

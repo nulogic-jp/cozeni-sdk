@@ -463,7 +463,8 @@ export async function testPurchase(
   );
   let page: PagePath;
   try {
-    const access = new URL(product.access_url);
+    // URLを持たない商品（access_url が null）は空文字で不正なURLとして扱い、下の拒否に流す。
+    const access = new URL(product.access_url ?? "");
     page = { pathname: access.pathname, search: access.search };
   } catch {
     throw new CliError(
