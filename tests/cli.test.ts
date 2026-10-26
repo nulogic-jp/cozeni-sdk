@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type CliContext, run } from "../src/cli/run.js";
 import { satisfies, skillRange } from "../src/cli/skill-version.js";
 import { createStore } from "../src/cli/store.js";
+import { fixture } from "./fixtures/external-api-v1.literal.js";
 
 const API = "https://api.cozeni.net";
 const APP = "https://cozeni.net";
@@ -1196,6 +1197,32 @@ describe("status", () => {
       expires_at: token.expires_at,
     });
     expect(data.warnings).toEqual([]);
+  });
+  it("機能フラグ・ファイルの商品を null と出さずに種類で表示する", async () => {
+    await saveLogin();
+    const fileProduct = {
+      ...product,
+      id: "prd_file",
+      name: "資料集",
+      access_type: "file",
+      access_url: null,
+    };
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json(account)
+        : json({
+            items: [fixture.feature_product, fileProduct],
+            next_cursor: null,
+          }),
+    );
+    const { out } = await t.run("status");
+    expect(out).not.toContain("null");
+    expect(out).toContain(
+      "機能フラグ（設定値: daily_messages=100, plan=pro, beta=true）",
+    );
+    expect(out).toContain("- prd_file 資料集 1,000円 ファイル");
+    const list = await t.run("products", "list");
+    expect(list.out).not.toContain("null");
   });
   it("利用者にそのまま見せる次にやることを返す", async () => {
     await saveLogin();

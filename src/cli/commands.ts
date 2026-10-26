@@ -5,6 +5,7 @@ import {
   type AccountSales,
   type CheckoutLink,
   CozeniError,
+  type FeatureFlagMetadata,
   type Product,
   type SalesBlocker,
   type UpdateProduct,
@@ -107,8 +108,23 @@ async function allProducts(
   );
 }
 
+/** 機能フラグの設定値を `k=v, …` で並べる。無ければ「設定値なし」。 */
+function metadataText(metadata: FeatureFlagMetadata | undefined): string {
+  const entries = Object.entries(metadata ?? {});
+  return entries.length === 0
+    ? "設定値なし"
+    : entries.map(([key, value]) => `${key}=${value}`).join(", ");
+}
+
+function productKind(product: Product): string {
+  if (product.access_type === "feature")
+    return `機能フラグ（設定値: ${metadataText(product.metadata)}）`;
+  if (product.access_type === "file") return "ファイル";
+  return String(product.access_url);
+}
+
 function productLine(product: Product): string {
-  return `- ${product.id} ${product.name} ${yen(product.price_jpy)} ${product.access_url}${product.status === "active" ? "" : `（${product.status}）`}`;
+  return `- ${product.id} ${product.name} ${yen(product.price_jpy)} ${productKind(product)}${product.status === "active" ? "" : `（${product.status}）`}`;
 }
 
 const blockerMessages: Record<SalesBlocker["code"], string> = {
