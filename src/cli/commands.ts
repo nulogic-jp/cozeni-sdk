@@ -5,6 +5,7 @@ import {
   type AccountSales,
   type CheckoutLink,
   CozeniError,
+  type CreateProduct,
   type FeatureFlagMetadata,
   type Product,
   type SalesBlocker,
@@ -116,9 +117,11 @@ function metadataText(metadata: FeatureFlagMetadata | undefined): string {
     : entries.map(([key, value]) => `${key}=${value}`).join(", ");
 }
 
+const featureLabel = (metadata: FeatureFlagMetadata | undefined) =>
+  `機能フラグ（設定値: ${metadataText(metadata)}）`;
+
 function productKind(product: Product): string {
-  if (product.access_type === "feature")
-    return `機能フラグ（設定値: ${metadataText(product.metadata)}）`;
+  if (product.access_type === "feature") return featureLabel(product.metadata);
   if (product.access_type === "file") return "ファイル";
   return String(product.access_url);
 }
@@ -403,6 +406,8 @@ export interface ProductInput {
   price?: string;
   "access-url"?: string;
   "allow-duplicate"?: boolean;
+  feature?: boolean;
+  metadata?: string[];
 }
 // サーバーが受け付ける価格の範囲（円）。
 const MIN_PRICE = 50;
@@ -442,26 +447,89 @@ function parseAccessUrl(value: string): string {
   return url.href;
 }
 
+const METADATA_VALUE_NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+/** `--metadata key=value` を設定値にする。true/false は真偽値、数の形は数値、それ以外は文字列。 */
+export function parseMetadata(values: string[]): FeatureFlagMetadata {
+  const metadata: FeatureFlagMetadata = {};
+  for (const item of values) {
+    const separator = item.indexOf("=");
+    const key = separator < 0 ? "" : item.slice(0, separator);
+    if (separator < 0 || key === "")
+      throw new CliError(
+        "invalid_input",
+        `--metadata は key=value の形で指定してください: ${item}`,
+      );
+    if (Object.hasOwn(metadata, key))
+      throw new CliError(
+        "invalid_input",
+        `--metadata のキーが重複しています: ${key}`,
+      );
+    const raw = item.slice(separator + 1);
+    metadata[key] =
+      raw === "true"
+        ? true
+        : raw === "false"
+          ? false
+          : METADATA_VALUE_NUMBER.test(raw)
+            ? Number(raw)
+            : raw;
+  }
+  return metadata;
+}
+
+function sameMetadata(a: FeatureFlagMetadata, b: FeatureFlagMetadata) {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
+  );
+}
+
+/** 機能フラグの商品を作ったあと、利用者に頼むキーの発行の案内（キーの値は含まない）。 */
+function featureKeyRequest(session: Session, sandbox: boolean): string {
+  const place = session.appOrigin
+    ? `${session.appOrigin}/settings/developer`
+    : "Cozeni の開発者設定";
+  return `利用者に、${place} で、権限「購入画面を作る」「購入者の機能フラグを確かめる」の API キーの発行を頼みます。キーは利用者が環境変数 COZENI_API_KEY に入れます（手元の開発ではローカルの .env.local、本番では本番の環境変数）。${sandbox ? "サンドボックスのキーなので COZENI_ENVIRONMENT=sandbox も同じ場所に入れます。" : ""}キーの値は読まない・表示しない。`;
+}
+
 export async function createProduct(
   session: Session,
   context: CommandContext,
   store: Store,
   input: ProductInput,
 ): Promise<Output> {
-  if (
-    input.name === undefined ||
-    input.price === undefined ||
-    !input["access-url"]
-  )
+  if (input.name === undefined || input.price === undefined)
     throw new CliError(
       "invalid_input",
-      "--name・--price・--access-url をすべて指定してください。",
+      "--name・--price と、--access-url か --feature を指定してください。",
     );
-  const product = {
-    name: parseName(input.name),
-    price_jpy: parsePrice(input.price),
-    access_url: parseAccessUrl(input["access-url"]),
-  };
+  const feature = input.feature === true;
+  if (feature === Boolean(input["access-url"]))
+    throw new CliError(
+      "invalid_input",
+      "--access-url（購入後に見せるページ）か --feature（機能フラグ）のどちらかを指定してください。",
+    );
+  if (!feature && input.metadata !== undefined)
+    throw new CliError(
+      "invalid_input",
+      "--metadata は --feature のときだけ指定できます。",
+    );
+  const name = parseName(input.name);
+  const priceJpy = parsePrice(input.price);
+  const metadata = feature ? parseMetadata(input.metadata ?? []) : {};
+  const accessUrlInput = input["access-url"];
+  const accessUrl = accessUrlInput ? parseAccessUrl(accessUrlInput) : undefined;
+  const product: CreateProduct =
+    accessUrl === undefined
+      ? { name, price_jpy: priceJpy, access_type: "feature", metadata }
+      : { name, price_jpy: priceJpy, access_url: accessUrl };
+  // 機能フラグの案内（サンドボックスか）と冪等キーのために、接続先のアカウントを1度だけ取る。
+  let account: Account | undefined;
+  const getAccount = async () =>
+    (account ??= await call(session, context, () =>
+      session.client.account.get(),
+    ));
   // 導入のやり直しで同じ商品が増えないよう、作る前に同じ内容の有効な商品を探す。
   // 見つかれば作らず（確認も要らない）、それを返す。購入リンクは取得だけで、発行しない。
   if (!input["allow-duplicate"]) {
@@ -470,21 +538,35 @@ export async function createProduct(
         item.status === "active" &&
         item.name === product.name &&
         item.price_jpy === product.price_jpy &&
-        // URLを持たない商品（feature・file）は限定ページの商品と同じにならない。
-        item.access_url !== null &&
-        sameUrl(item.access_url, product.access_url),
+        (accessUrl === undefined
+          ? item.access_type === "feature" &&
+            sameMetadata(item.metadata ?? {}, metadata)
+          : // URLを持たない商品（feature・file）は限定ページの商品と同じにならない。
+            item.access_type !== "feature" &&
+            item.access_url !== null &&
+            sameUrl(item.access_url, accessUrl)),
     );
     if (same) {
       const found = await existingLink(session, context, same.id);
+      const linkStep = found
+        ? null
+        : `${CLI} link ${same.id}${profileSuffix(session.profile)}`;
+      const keyStep = feature
+        ? featureKeyRequest(
+            session,
+            (await getAccount()).environment === "sandbox",
+          )
+        : null;
       return {
         data: {
           product: same,
           checkout_link: found,
           reused: true,
           reason: "same_product_exists",
-          next_step: found
-            ? null
-            : `${CLI} link ${same.id}${profileSuffix(session.profile)}`,
+          next_step:
+            linkStep && keyStep
+              ? `${linkStep} のあと、${keyStep}`
+              : (linkStep ?? keyStep),
         },
         human: [
           `同じ内容の商品がすでにあるため、新しく作らずにその商品を返しました: ${same.name}（${yen(same.price_jpy)}）`,
@@ -498,22 +580,36 @@ export async function createProduct(
     }
   }
   await context.confirm(
-    `商品「${product.name}」を ${yen(product.price_jpy)} で作成します。購入後に表示するページ: ${product.access_url}`,
+    accessUrl === undefined
+      ? `商品「${product.name}」を ${yen(product.price_jpy)} で作成します。種類: ${featureLabel(metadata)}。種類は作成後に変えられません。`
+      : `商品「${product.name}」を ${yen(product.price_jpy)} で作成します。購入後に表示するページ: ${accessUrl}`,
     { action: "create", product },
   );
-  const account = await call(session, context, () =>
-    session.client.account.get(),
-  );
+  const { creator_id: creatorId, environment } = await getAccount();
   // タイムアウト後の再実行で商品が二重にならないよう、入力ごとの冪等キーを送信前に保存する。
+  // 限定ページのハッシュは従来のまま変えない（導入の途中のキーを使い回せるように）。
   const hash = createHash("sha256")
     .update(
-      JSON.stringify([
-        session.profile.name,
-        account.creator_id,
-        product.name,
-        product.price_jpy,
-        product.access_url,
-      ]),
+      JSON.stringify(
+        accessUrl === undefined
+          ? [
+              session.profile.name,
+              creatorId,
+              product.name,
+              product.price_jpy,
+              "feature",
+              Object.entries(metadata).sort(([a], [b]) =>
+                a < b ? -1 : a > b ? 1 : 0,
+              ),
+            ]
+          : [
+              session.profile.name,
+              creatorId,
+              product.name,
+              product.price_jpy,
+              accessUrl,
+            ],
+      ),
     )
     .digest("hex");
   const pendingName = `idem-${hash}`;
@@ -548,6 +644,7 @@ export async function createProduct(
   const created = await call(session, context, () =>
     session.client.products.create(product, { idempotencyKey }),
   );
+  // 機能フラグでも標準リンクは作る（固定メールの購入試行が紐づくため）。購入ボタンには使わない。
   const result = checkoutLink(
     await call(session, context, () =>
       session.client.checkoutLinks.ensure(created.id),
@@ -568,14 +665,18 @@ export async function createProduct(
       checkout_link: result,
       reused,
       ...(reused ? { reason: "idempotent_retry" } : {}),
-      next_step: null,
+      next_step: feature
+        ? featureKeyRequest(session, environment === "sandbox")
+        : null,
     },
     human: [
       reused
         ? `同じ内容の商品を作成済みのため、その商品を返しました: ${created.name}（${yen(created.price_jpy)}）`
         : `商品を作成しました: ${created.name}（${yen(created.price_jpy)}）`,
       `商品ID: ${created.id}`,
-      `購入リンク: ${result.url}`,
+      feature
+        ? `公開の購入リンク（購入ボタンには使わず、サーバーの createCheckout を使う）: ${result.url}`
+        : `購入リンク: ${result.url}`,
     ],
   };
 }
@@ -652,7 +753,9 @@ export async function updateProduct(
     data: { product: updated },
     human: [
       `商品を更新しました: ${updated.name}（${yen(updated.price_jpy)}）`,
-      `購入後に表示するページ: ${updated.access_url}`,
+      ...(updated.access_url === null
+        ? []
+        : [`購入後に表示するページ: ${updated.access_url}`]),
     ],
   };
 }

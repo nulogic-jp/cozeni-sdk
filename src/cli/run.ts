@@ -89,6 +89,8 @@ const commands: Record<string, string[]> = {
     "price",
     "access-url",
     "allow-duplicate",
+    "feature",
+    "metadata",
   ],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
@@ -113,7 +115,10 @@ const help = `Cozeni CLI ${version}
   products list             商品一覧
   products get <商品ID>     商品1件と購入リンクの状態を表示（リンクは発行しない）
   products create --name <名前> --price <円> --access-url <URL>
+  products create --name <名前> --price <円> --feature [--metadata key=value …]
                             商品を作成し、購入リンクを返す（確認が必要）。
+                            --feature は機能フラグの商品（--metadata は設定値で、
+                            true/false・数値・文字列。種類は作成後に変えられない）。
                             同じ内容の商品があれば作らずにそれを返す
                             （それでも作るなら --allow-duplicate）
   products update <商品ID> [--name] [--price] [--access-url]
@@ -175,6 +180,8 @@ type Flags = {
   name?: string;
   price?: string;
   "access-url"?: string;
+  feature?: boolean;
+  metadata?: string[];
   product?: string;
   "site-origin"?: string;
   help?: boolean;
@@ -199,6 +206,8 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         name: { type: "string" },
         price: { type: "string" },
         "access-url": { type: "string" },
+        feature: { type: "boolean" },
+        metadata: { type: "string", multiple: true },
         product: { type: "string" },
         "site-origin": { type: "string" },
         help: { type: "boolean", short: "h" },
