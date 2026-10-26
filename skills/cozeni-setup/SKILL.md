@@ -99,10 +99,10 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 - **Next.js（App Router）**：[references/nextjs.md](references/nextjs.md)
 - **それ以外の JavaScript / TypeScript サーバー**：[references/javascript-server.md](references/javascript-server.md)
-- **機能フラグ**：上の資料の「機能フラグ」節に従う。`data.next_step` のとおり、利用者に API キー（「購入画面を作る」「購入者の機能フラグを確かめる」の2権限）の発行と、環境変数 `COZENI_API_KEY` への設定を頼み、**入れたと返事があるまで待つ**。キーの値は読まない・書かない・表示しない。
+- **機能フラグ**：上の資料の「機能フラグ」節に従う。`data.next_step` のとおり、利用者に API キー（「購入画面を作る」「購入者の機能フラグを確かめる」の2権限）の発行と、環境変数 `COZENI_API_KEY` への設定を頼み、**入れたと返事があるまで待つ**。キーの値は読まない・書かない・表示しない。**機能フラグの導入では、AI は `.env.local` を開かない・編集しない。** キーも `COZENI_ENVIRONMENT=sandbox`（サンドボックスのとき）も、利用者がキーと同じ場所に入れる。`COZENI_SITE_ORIGIN` は書かせない（機能フラグの3関数は読まない）。確かめるのは `grep -c '^COZENI_API_KEY=' .env.local` だけ。
 - 静的ファイルだけのサイトでは限定ページを守れない。サーバーの処理（SSR・serverless function・Worker など）が無ければ、作業を止めて利用者に説明する。
 
-手元の環境変数（例：`.env.local`）に `COZENI_SITE_ORIGIN=<siteOrigin>` を設定する。`status` の `data.environment` が `sandbox` なら、`COZENI_ENVIRONMENT=sandbox` も設定する（無いとサイトが本番の Cozeni に問い合わせ、サンドボックスの商品の購入者を認められない）。購入者限定ページのサイトに必要な環境変数はこれだけで、API キーは使わない（機能フラグだけ、上の `COZENI_API_KEY` を使う）。
+**購入者限定ページのとき**は、手元の環境変数（例：`.env.local`）に `COZENI_SITE_ORIGIN=<siteOrigin>` を設定する。`status` の `data.environment` が `sandbox` なら、`COZENI_ENVIRONMENT=sandbox` も設定する（無いとサイトが本番の Cozeni に問い合わせ、サンドボックスの商品の購入者を認められない）。購入者限定ページのサイトに必要な環境変数はこれだけで、API キーは使わない。機能フラグは上のとおり `.env.local` に触れず、`COZENI_API_KEY` と `COZENI_ENVIRONMENT` は利用者が入れる。
 
 ### 7. 動作確認
 
@@ -125,7 +125,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 8. テスト購入（`test-purchase`。サンドボックスだけ）
 
-**機能フラグの商品は `--site-origin` なし**で `npx cozeni test-purchase --product <prd_…> --json` を実行する。付与と設定値を確かめるだけで、**返金はしない**。`data.next_step` のとおり、利用者本人（Cozeni のアカウントのメールアドレス）のアカウントでアプリにログインして機能が使えることを確かめてもらい（サンドボックスで購入画面を作れるのは利用者本人のメールだけで、ほかは `sandbox_recipient_not_allowed`）、返事のあとに `npx cozeni test-purchase --product <prd_…> --refund --json` で返金する。以下は限定ページの商品の手順。
+**機能フラグの商品は `--site-origin` なし**で `npx cozeni test-purchase --product <prd_…> --json` を実行する。付与と設定値を確かめるだけで、**返金はしない**。`data.next_step` のとおり、利用者本人（Cozeni のアカウントのメールアドレス）のアカウントでアプリにログインして機能が使えることを確かめてもらい（サンドボックスで購入画面を作れるのは利用者本人のメールだけで、ほかは `sandbox_recipient_not_allowed`）、返事のあとに `npx cozeni test-purchase --product <prd_…> --refund --json` で返金する。このあとの `--site-origin` を使う手順は限定ページの商品のもの。終了コード6（`authorization_pending`）の打ち直しは、機能フラグにも当てはまる。
 
 開発サーバーを起動したまま、`npx cozeni test-purchase --product <prd_…> --site-origin <開発サーバーのアドレス> --json` を実行する。**サーバーがテストカードで決済を確定させ、CLI が限定ページに入れることと、未購入では `enter_url` へ送られることを確かめて返金する。** ワンタイムコードは出力されない。決済画面は操作しない。`--site-origin` は `localhost`・`127.0.0.1`・`[::1]` のアドレスに限る。本番（`production` プロファイル）では動かない。
 
@@ -141,7 +141,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 9. 本番への切り替え
 
-利用者が本番への導入を許可したら、**まず `npx cozeni status --json` の `data.warnings` に `test_purchase_not_refunded` があれば、`data.unrefunded_test_purchases` の商品を `--refund` で返金する。** 機能フラグは本番でも `--feature` で商品を作り、本番のキーは利用者が本番の開発者設定で発行して本番の環境変数に入れる。そのあと `npx cozeni login --profile production --json` を実行し、本番の承認URLとコードを渡して許可してもらう。許可されなかったら本番へは進まず、テスト用の環境のまま終える。
+利用者が本番への導入を許可したら、**まず `npx cozeni status --json` の `data.warnings` に `test_purchase_not_refunded` があれば、`data.unrefunded_test_purchases` の商品を `--refund` で返金する。** そのあと `npx cozeni login --profile production --json` を実行し、本番の承認URLとコードを渡して許可してもらう。許可されなかったら本番へは進まず、テスト用の環境のまま終える。機能フラグは、本番へのログインと切り替えの後に、本番でも `--feature` で商品を作る。本番のキーは利用者が本番の開発者設定で発行して本番の環境変数に入れる。
 
 - 承認の返事を待ち、`npx cozeni login --complete --profile production --json` を実行する。本番のアカウントが `init` で覚えたものと一致すれば、CLI が既定の接続先を本番に書き換える（`data.switched_to_production: true`）。別のアカウントなら `creator_mismatch` で止まり、切り替えない。
 - 本番にログイン済みで一致しているときは、承認URLは出ない。本番への導入はすでに許可を得ているので、`npx cozeni switch --json` で切り替える。
@@ -158,7 +158,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 1. **サンドボックスを通らず本番に直接つないだときは、テスト購入をしていないことを最初に書く。**
 2. **`data.message_for_user` の各行を、言い換えずにそのまま書く**（販売できるなら「すぐ販売できます。」）。
 3. **機能フラグのときは、「利用者がやること」の先頭に、本番のキーの発行と本番の環境変数 `COZENI_API_KEY` への設定を書く。** 管理画面の商品編集で購入完了ページの URL を設定すると、購入後にアプリへ戻せる（未設定でも Cozeni の完了画面が「サービスに戻ってご利用ください」と出す）。
-4. 公開先の設定：「公開しているサイトの環境変数に `COZENI_SITE_ORIGIN=<公開中のアドレス>` を設定してください。未設定だと、購入後に限定ページを開けません」。設定やデプロイは利用者が行う。自分では行わない。
+4. 公開先の設定（購入者限定ページのときだけ。機能フラグには不要）：「公開しているサイトの環境変数に `COZENI_SITE_ORIGIN=<公開中のアドレス>` を設定してください。未設定だと、購入後に限定ページを開けません」。設定やデプロイは利用者が行う。自分では行わない。
 5. したこと（商品・購入リンク・変更したファイル）と、確かめたこと・確かめられなかったこと。追加されたファイル（`.agents/skills/` など）はプロジェクトと一緒にコミットするよう伝える。
 
 ## 確認が必要な操作
