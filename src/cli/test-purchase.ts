@@ -13,6 +13,7 @@ import {
   convert,
   PRODUCTION_API_ORIGIN,
   type Profile,
+  profileSuffix,
   type Session,
 } from "./api.js";
 import {
@@ -448,8 +449,9 @@ const featureNextStep = (
   product: { id: string; name: string },
   metadata: Record<string, unknown>,
   flow: Flow | undefined,
+  profile: Profile,
 ) => {
-  const refund = `${CLI} test-purchase --product ${product.id} --refund --json`;
+  const refund = `${CLI} test-purchase --product ${product.id} --refund${profileSuffix(profile)} --json`;
   const entries = Object.entries(metadata);
   return [
     "利用者に1通で次を伝えます。",
@@ -622,7 +624,12 @@ export async function testPurchase(
         created_at: new Date(context.now()).toISOString(),
       },
     );
-    const steps = featureNextStep(product, metadata, target.flow);
+    const steps = featureNextStep(
+      product,
+      metadata,
+      target.flow,
+      current.profile,
+    );
     return {
       data: {
         profile: current.profile.name,

@@ -1057,7 +1057,7 @@ describe("products", () => {
         expect(t.calls).toHaveLength(0);
       }
     });
-    it.each([["a=1", "a=2"], ["noequals"], ["=1"]])(
+    it.each([["a=1", "a=2"], ["noequals"], ["=1"], ["__proto__=1"]])(
       "--metadata %s は invalid_input",
       async (...values) => {
         await saveLogin();

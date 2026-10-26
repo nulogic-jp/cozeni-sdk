@@ -495,6 +495,11 @@ export function parseMetadata(values: string[]): FeatureFlagMetadata {
         "invalid_input",
         `--metadata は key=value の形で指定してください: ${item}`,
       );
+    if (key === "__proto__")
+      throw new CliError(
+        "invalid_input",
+        "--metadata のキーに __proto__ は使えません。",
+      );
     if (Object.hasOwn(metadata, key))
       throw new CliError(
         "invalid_input",

@@ -1031,6 +1031,21 @@ describe("test-purchase", () => {
       expect(t.parsed().error.code).toBe("invalid_response");
       expect(await store().loadPending(markName)).toBeUndefined();
     });
+    it("--profile sandbox で購入したとき（既定ではないとき）、返金の案内に --profile sandbox が付く", async () => {
+      await store().saveConfig({
+        version: 1,
+        default_profile: "production",
+        flow: "sandbox-first",
+        profiles: { production: { expected_creator_id: "cre_1" }, sandbox: {} },
+      });
+      const t = cli(api({ ...feature, start: featureStart }));
+      expect((await t.run(...featureArgs, "--profile", "sandbox")).code).toBe(
+        0,
+      );
+      expect(t.parsed().data.next_step).toContain(
+        `npx cozeni test-purchase --product ${PRODUCT_ID} --refund --profile sandbox --json`,
+      );
+    });
     it("--refund は返金だけを呼び、印を消す。nothing_to_refund でも成功", async () => {
       for (const reply of [
         { status: "refunded", refund_count: 1 },
