@@ -1,16 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  type AccessType,
   type Account,
   type CheckoutLink,
   CozeniError,
   type CreateProduct,
+  type CustomerState,
   createCustomerClient,
   createManagementClient,
   type Entitlement,
+  type FeatureFlagMetadata,
   type Product,
   type ProductImage,
   type ProductList,
+  type Scope,
   type UpdateProduct,
 } from "../src/index.js";
 import { fixture } from "./fixtures/external-api-v1.literal.js";
@@ -61,7 +65,8 @@ interface Schema {
   properties?: Record<string, Schema>;
   items?: Schema;
   nullable?: boolean;
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | Schema;
+  allOf?: Schema[];
   minimum?: number;
   maximum?: number;
   minLength?: number;
@@ -117,6 +122,8 @@ function matches(schema: Schema, value: unknown): boolean {
     return matches(target, value);
   }
   if (value === null && schema.nullable) return true;
+  if (schema.allOf && !schema.allOf.every((part) => matches(part, value)))
+    return false;
   if (schema.oneOf)
     return (
       schema.oneOf.filter((candidate) => matches(candidate, value)).length === 1
@@ -130,6 +137,16 @@ function matches(schema: Schema, value: unknown): boolean {
     if (
       schema.additionalProperties === false &&
       Object.keys(object).some((key) => !schema.properties?.[key])
+    )
+      return false;
+    // スキーマ形式のadditionalPropertiesは、properties以外のキーの値に適用する。
+    const extra = schema.additionalProperties;
+    if (
+      extra &&
+      typeof extra === "object" &&
+      Object.entries(object).some(
+        ([key, item]) => !schema.properties?.[key] && !matches(extra, item),
+      )
     )
       return false;
     return Object.entries(schema.properties ?? {}).every(
@@ -296,6 +313,52 @@ const managementCases = [
     status: 200,
     response: link,
     call: (client: Management) => client.checkoutLinks.ensure(product.id),
+  },
+  {
+    id: "externalCreateCheckoutSession",
+    status: 201,
+    response: {
+      checkout_id: fixture.checkout_session.checkout_id,
+      url: fixture.checkout_session.url,
+      expires_at: fixture.checkout_session.expires_at,
+    },
+    // SDKはcamelCaseで返すので、契約の応答（snake_case）への写像を戻して比べる。
+    call: async (client: Management) => {
+      const result = await client.createCheckout({
+        productId: fixture.checkout_session_input.product_id,
+        email: fixture.checkout_session_input.email,
+      });
+      return {
+        checkout_id: result.checkoutId,
+        url: result.url,
+        expires_at: result.expiresAt,
+      };
+    },
+  },
+  {
+    id: "externalGetCustomerState",
+    status: 200,
+    response: {
+      customer_id: fixture.customer_state.customer_id,
+      feature_flags: fixture.customer_state.feature_flags.map((flag) => ({
+        ...flag,
+        metadata: { ...flag.metadata },
+      })),
+    },
+    call: async (client: Management) => {
+      const result = await client.getCustomerState({
+        email: fixture.customer_state_input.email,
+      });
+      return {
+        customer_id: result.customerId,
+        feature_flags: result.featureFlags.map((flag) => ({
+          product_id: flag.productId,
+          benefit_id: flag.benefitId,
+          granted_at: flag.grantedAt,
+          metadata: flag.metadata,
+        })),
+      };
+    },
   },
 ];
 // 契約にあるが、このファイルでは検証しない操作。契約に操作が増えたら、
@@ -595,4 +658,83 @@ describe("正式外部v1契約とSDK", () => {
       ).rejects.toBeInstanceOf(CozeniError);
     },
   );
+});
+
+describe("機能フラグの外部契約とSDK", () => {
+  it("機能フラグ・ファイルの商品（access_url: null）が型と契約に合う", () => {
+    // as constのimagesはreadonlyタプルなので、公開型（可変配列）へ複製して型検査する。
+    const featureProduct = {
+      ...fixture.feature_product,
+      images: [...fixture.feature_product.images],
+    } satisfies Product;
+    expect(featureProduct.access_type).toBe("feature");
+    expect(featureProduct.access_url).toBeNull();
+    expectTypeOf<Product["access_url"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<Product["access_type"]>().toEqualTypeOf<AccessType>();
+    expectTypeOf<AccessType>().toEqualTypeOf<"page" | "feature" | "file">();
+    expectTypeOf<Product["metadata"]>().toEqualTypeOf<FeatureFlagMetadata>();
+  });
+  it("作成の型は page 形と feature 形だけを受け付ける", () => {
+    const page = fixture.create_product satisfies CreateProduct;
+    const feature = fixture.create_feature_product satisfies CreateProduct;
+    // @ts-expect-error feature 形に access_url は書けない
+    const mixed: CreateProduct = {
+      ...feature,
+      access_url: "https://example.com",
+    };
+    // @ts-expect-error page 形に metadata は書けない
+    const pageWithMetadata: CreateProduct = { ...page, metadata: { a: 1 } };
+    const file: CreateProduct = {
+      name: "資料",
+      price_jpy: 100,
+      // @ts-expect-error file は作成の入力に使えない
+      access_type: "file",
+    };
+    expect([page, feature, mixed, pageWithMetadata, file]).toHaveLength(5);
+  });
+  it("更新の型は access_type を送れず、metadata・description を受け付ける", () => {
+    const body = {
+      metadata: { plan: "pro" },
+      description: null,
+    } satisfies UpdateProduct;
+    // @ts-expect-error access_type は作成後に変えられない
+    const typeChange: UpdateProduct = { access_type: "feature" };
+    expect([body, typeChange]).toHaveLength(2);
+  });
+  it("設定値の契約は値の型を縛り、null・空文字・入れ子を拒否する", () => {
+    const metadata: Schema = {
+      $ref: "#/components/schemas/ExternalFeatureFlagMetadata",
+    };
+    const updateMetadata =
+      specification.components.schemas.ExternalUpdateProduct?.properties
+        ?.metadata;
+    expect(updateMetadata?.allOf).toBeDefined();
+    for (const schema of [metadata, updateMetadata as Schema]) {
+      expect(matches(schema, { plan: "pro", n: 100, beta: true })).toBe(true);
+      expect(matches(schema, {})).toBe(true);
+      expect(matches(schema, { a: null })).toBe(false);
+      expect(matches(schema, { a: "" })).toBe(false);
+      expect(matches(schema, { a: { nested: true } })).toBe(false);
+    }
+  });
+  it("スコープに customers:read・checkouts:write がある", () => {
+    const scopes = [
+      "customers:read",
+      "checkouts:write",
+    ] as const satisfies readonly Scope[];
+    expect(scopes).toHaveLength(2);
+  });
+  it("購入者の状態の型が契約の例（camelCase）と合う", () => {
+    const state = {
+      customerId: fixture.customer_state.customer_id,
+      featureFlags: fixture.customer_state.feature_flags.map((flag) => ({
+        productId: flag.product_id,
+        benefitId: flag.benefit_id,
+        grantedAt: flag.granted_at,
+        metadata: { ...flag.metadata },
+      })),
+    } satisfies CustomerState;
+    expect(state.featureFlags).toHaveLength(1);
+    expectTypeOf<CustomerState["customerId"]>().toEqualTypeOf<string | null>();
+  });
 });

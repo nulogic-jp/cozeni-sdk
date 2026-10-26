@@ -24,6 +24,10 @@ const knownCodes = new Set([
   "idempotency_conflict",
   "product_archived",
   "checkout_link_disabled",
+  // 機能フラグの購入画面の作成。購入済み・販売の準備が未完了・サンドボックスで販売者以外のメール。
+  "already_purchased",
+  "creator_not_ready",
+  "sandbox_recipient_not_allowed",
   // 商品画像のアップロード。5MB超（413）と、JPEG・PNG・WebP以外（415）。
   "image_too_large",
   "unsupported_image_type",

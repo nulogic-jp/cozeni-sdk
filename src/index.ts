@@ -22,7 +22,9 @@ export type Scope =
   | "products:read"
   | "products:write"
   | "checkout_links:read"
-  | "checkout_links:write";
+  | "checkout_links:write"
+  | "customers:read"
+  | "checkouts:write";
 export type SalesRejectionReasonCode =
   | "tokushoho_missing_contact"
   | "tokushoho_unreachable"
@@ -64,26 +66,58 @@ export interface Account {
   // 旧バージョンのAPIはsalesを返さないため任意項目にする。
   sales?: AccountSales;
 }
-export interface CreateProduct {
-  name: string;
-  price_jpy: number;
-  access_url: string;
-  // Markdown。前後の空白を除いて4000コードポイントまで。null・空白だけなら説明なし。
-  // 長さはSDKでは検証せず、サーバーの判定（invalid_input）に任せる。
+// 機能フラグの設定値。件数・キー・値の制約はAPI側で検証する。秘匿情報は入れない。
+export type FeatureFlagMetadata = Record<string, string | number | boolean>;
+// 商品の種類。作成できるのは page と feature で、file は応答にだけ現れる。
+export type AccessType = "page" | "feature" | "file";
+// 作成の入力は access_type で2形に分かれる（API契約のoneOfと同じ）。
+export type CreateProduct =
+  | {
+      name: string;
+      price_jpy: number;
+      access_type?: "page";
+      access_url: string;
+      // 型で混ぜ書きを止める（API側も400）。
+      metadata?: never;
+      // Markdown。前後の空白を除いて4000コードポイントまで。null・空白だけなら説明なし。
+      // 長さはSDKでは検証せず、サーバーの判定（invalid_input）に任せる。
+      description?: string | null;
+    }
+  | {
+      name: string;
+      price_jpy: number;
+      access_type: "feature";
+      metadata?: FeatureFlagMetadata;
+      access_url?: never;
+      description?: string | null;
+    };
+// Partial<CreateProduct> はunionのPartialになりAPIが受け付ける形と違うので明示する。
+// access_type は作成後に変えられないので送れない。
+export interface UpdateProduct {
+  name?: string;
+  price_jpy?: number;
+  access_url?: string;
+  metadata?: FeatureFlagMetadata;
   description?: string | null;
 }
-export type UpdateProduct = Partial<CreateProduct>;
 export interface ProductImage {
   id: string;
   url: string;
   content_type: string;
   size_bytes: number;
 }
-export interface Product extends Omit<CreateProduct, "description"> {
+// unionのCreateProductはextendsできないので、応答の形を別に持つ。
+// URLを持たない商品（feature・file）の access_url は null。判定には access_type を使う。
+export interface Product {
   id: string;
+  name: string;
+  price_jpy: number;
+  currency: "jpy";
+  access_type: AccessType;
+  access_url: string | null;
+  metadata: FeatureFlagMetadata;
   description: string | null;
   images: ProductImage[];
-  currency: "jpy";
   status: "active" | "archived";
   created_at: string;
   updated_at: string;
@@ -109,6 +143,16 @@ export type Entitlement =
       enterUrl?: string;
     }
   | { entitled: false; reason: "unavailable" };
+export interface CustomerState {
+  // 機能フラグの権利が1件以上あるときだけ返る。無ければ null。
+  customerId: string | null;
+  featureFlags: {
+    productId: string;
+    benefitId: string;
+    grantedAt: string;
+    metadata: FeatureFlagMetadata;
+  }[];
+}
 
 /**
  * enter_url の構造検証。API応答の取り込み時（checkEntitlement）と
@@ -190,15 +234,101 @@ function validPortalUrl(
     return undefined;
   return url;
 }
+const CHECKOUT_PATH = /^\/checkout\/[A-Za-z0-9_-]{1,200}$/;
+/**
+ * 購入画面のURL（`/checkout/{識別子}?checkout={checkout_id}`）の構造検証。
+ * validPortalUrlと同じく、API応答をそのまま購入者へ渡さず構造で縛る。
+ *
+ * - httpsが必須。httpはloopbackだけ許可（開発用）
+ * - userinfo・fragmentを含まない
+ * - pathnameは"/checkout/{識別子}"（英数字・"_"・"-"、200文字まで）
+ * - クエリは"checkout"の1個だけで、値は応答のcheckout_idと完全一致する
+ * - 既知の環境（本番・サンドボックス）につないでいれば、その環境の購入者面のオリジンと一致する
+ *
+ * いずれかに反する場合はundefined（採用しない）。
+ */
+function validCheckoutUrl(
+  value: unknown,
+  expected: { origin?: string; checkoutId: string },
+): URL | undefined {
+  if (typeof value !== "string") return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    (url.protocol !== "https:" &&
+      !(url.protocol === "http:" && isLoopback(url))) ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    !CHECKOUT_PATH.test(url.pathname) ||
+    (expected.origin !== undefined && url.origin !== expected.origin) ||
+    [...url.searchParams.keys()].length !== 1 ||
+    url.searchParams.get("checkout") !== expected.checkoutId
+  )
+    return undefined;
+  return url;
+}
 function identifier(id: string): string {
   if (!id || id.length > 200 || id === "." || id === "..")
     throw new CozeniError("invalid_input");
   return encodeURIComponent(id);
 }
+function emailInput(email: string): string {
+  // 形式の検査はAPI側で行う。明らかな誤りだけ送信前に止める。
+  if (typeof email !== "string" || !email.trim() || email.length > 254)
+    throw new CozeniError("invalid_input");
+  return email;
+}
+function metadataValue(value: unknown): FeatureFlagMetadata | undefined {
+  if (!record(value)) return;
+  // JSON.parse は "__proto__" を own プロパティとして作る。受け取った側の
+  // コードがプロトタイプを書き換えてしまわないよう、契約外として扱う。
+  if (Object.hasOwn(value, "__proto__")) return;
+  for (const item of Object.values(value))
+    if (
+      typeof item !== "string" &&
+      typeof item !== "boolean" &&
+      !(typeof item === "number" && Number.isFinite(item))
+    )
+      return;
+  return value as FeatureFlagMetadata;
+}
+function customerState(data: unknown, status: number): CustomerState {
+  if (
+    !record(data) ||
+    (data.customer_id !== null && typeof data.customer_id !== "string") ||
+    !Array.isArray(data.feature_flags)
+  )
+    throw new CozeniError("invalid_response", status);
+  const featureFlags = data.feature_flags.map((flag: unknown) => {
+    const metadata = record(flag) ? metadataValue(flag.metadata) : undefined;
+    if (
+      !record(flag) ||
+      typeof flag.product_id !== "string" ||
+      typeof flag.benefit_id !== "string" ||
+      typeof flag.granted_at !== "string" ||
+      !metadata
+    )
+      throw new CozeniError("invalid_response", status);
+    return {
+      productId: flag.product_id,
+      benefitId: flag.benefit_id,
+      grantedAt: flag.granted_at,
+      metadata,
+    };
+  });
+  return { customerId: data.customer_id, featureFlags };
+}
 export function createManagementClient(options: ManagementClientOptions) {
   if (!options.apiKey || /\s/.test(options.apiKey))
     throw new CozeniError("invalid_input");
   const send = transport(options, options.apiKey);
+  // 購入画面のURLを照合する購入者面のオリジン（既知の環境のときだけ）。
+  const checkoutOrigin = knownCheckoutOrigin(resolveApiOrigin(options));
   async function request<T>(
     path: string,
     method: string,
@@ -210,6 +340,19 @@ export function createManagementClient(options: ManagementClientOptions) {
     if (!record(data))
       throw new CozeniError("invalid_response", response.status);
     return data as T;
+  }
+  async function getCustomerState(input: {
+    email: string;
+  }): Promise<CustomerState> {
+    const email = emailInput(input?.email);
+    // メールアドレスはURLに載せない（アクセスログに残さない）ので本文で送る。
+    const { response, data } = await send("/customers/state", "POST", {
+      email,
+    });
+    if (!response.ok) throw failure(response, data);
+    if (response.status !== 200)
+      throw new CozeniError("invalid_response", response.status);
+    return customerState(data, response.status);
   }
   return {
     account: { get: () => request<Account>("/account", "GET") },
@@ -265,6 +408,64 @@ export function createManagementClient(options: ManagementClientOptions) {
           `/products/${identifier(productId)}/checkout-link`,
           "PUT",
         ),
+    },
+    // ログイン中のユーザーのメールアドレスを固定した購入画面を作る。
+    // URLは購入者本人にだけ渡す。有効期限は30分で、過ぎたら作り直す。
+    async createCheckout(input: {
+      productId: string;
+      email: string;
+    }): Promise<{ checkoutId: string; url: string; expiresAt: string }> {
+      if (
+        typeof input?.productId !== "string" ||
+        !input.productId ||
+        input.productId.length > 200
+      )
+        throw new CozeniError("invalid_input");
+      const email = emailInput(input.email);
+      const { response, data } = await send("/checkout/sessions", "POST", {
+        product_id: input.productId,
+        email,
+      });
+      if (!response.ok) throw failure(response, data);
+      if (
+        response.status !== 201 ||
+        !record(data) ||
+        typeof data.checkout_id !== "string" ||
+        typeof data.expires_at !== "string"
+      )
+        throw new CozeniError("invalid_response", response.status);
+      const url = validCheckoutUrl(data.url, {
+        origin: checkoutOrigin,
+        checkoutId: data.checkout_id,
+      });
+      if (!url) throw new CozeniError("invalid_response", response.status);
+      return {
+        checkoutId: data.checkout_id,
+        url: url.href,
+        expiresAt: data.expires_at,
+      };
+    },
+    getCustomerState,
+    // 購入者がその商品の機能フラグを持つか。無ければ { granted: false, metadata: {} }。
+    // 照会の失敗（認証・レート制限・通信など）は握りつぶさず投げる。
+    async hasFeatureFlag(input: {
+      email: string;
+      productId: string;
+    }): Promise<{ granted: boolean; metadata: FeatureFlagMetadata }> {
+      // createCheckout と同じ検査。不正な商品IDは通信の前に止める。
+      if (
+        typeof input?.productId !== "string" ||
+        !input.productId ||
+        input.productId.length > 200
+      )
+        throw new CozeniError("invalid_input");
+      const state = await getCustomerState({ email: input.email });
+      const flag = state.featureFlags.find(
+        (item) => item.productId === input.productId,
+      );
+      return flag
+        ? { granted: true, metadata: flag.metadata }
+        : { granted: false, metadata: {} };
     },
   };
 }

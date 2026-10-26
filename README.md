@@ -6,11 +6,12 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 |---|---|---|
 | CLI（`npx cozeni`） | ログイン、商品の作成・更新、購入リンクの取得、販売状態の確認 | ログインで取得（手元にだけ保存） |
 | 管理API | 商品の作成・更新・取得、商品画像の設定・削除、購入リンクの発行 | 必要 |
+| 機能フラグ | 購入画面の作成、購入者の機能フラグの照会（サーバーだけで使う） | 必要（`checkouts:write`・`customers:read`） |
 | 購入者API | Cookieから購入権限を判定し、保護コンテンツの表示可否を決める | 不要 |
 | ハンドオフ | Cozeniの単回コードを自サイトのCookieへ交換 | 不要 |
-| `@nulogic/cozeni-sdk/next` | Next.js 15・16でのハンドオフ・認可・リダイレクト | 不要 |
+| `@nulogic/cozeni-sdk/next` | Next.js 15・16でのハンドオフ・認可・リダイレクト、機能フラグの3関数 | ハンドオフ・認可は不要、機能フラグの3関数は必要 |
 
-**本番のサイトは管理キーを使いません。** 管理操作は手元のCLIで行い、サイトには購入者API（キー不要）だけを組み込みます。
+**購入者限定ページのサイトは管理キーを使いません。** 管理操作は手元のCLIで行い、サイトには購入者API（キー不要）だけを組み込みます。**機能フラグを使うサイトだけは、サーバーの環境変数に専用のキーを置きます**（下の「機能フラグ」）。
 
 ## インストール
 
@@ -201,7 +202,7 @@ const withImage = await client.products.putImage(product.id, image);
 const withoutImage = await client.products.deleteImage(product.id);
 ```
 
-ほかに `account.get`、`products.list` / `get` / `update`、`checkoutLinks.ensure` があります。`price_jpy` は円をそのまま渡します。`create` の冪等キーはPOSTより前に保存し、応答を失っても同じ入力・同じキーで再送します（自動リトライはありません）。
+ほかに `account.get`、`products.list` / `get` / `update`、`checkoutLinks.ensure` があります。商品の種類は `access_type`（`'page'` 購入者限定ページ・`'feature'` 機能フラグ）で、作成で省略すると `'page'` です。`'feature'` の商品は `access_url` を持たず、`metadata`（設定値）を持てます。応答の `access_url` は、URLを持たない商品（`feature`・`file`）では `null` です。商品の種類の判定には `access_url` ではなく `access_type` を使います。`access_type` は作成後に変えられず、更新の `metadata` は全置換です（`{}` で全消去、省略で変更なし）。`price_jpy` は円をそのまま渡します。`create` の冪等キーはPOSTより前に保存し、応答を失っても同じ入力・同じキーで再送します（自動リトライはありません）。
 
 `description` は商品の説明（Markdown）で、`create` / `update` に任意で渡します。前後の空白を除いて4000コードポイントまでで、`null`・空白だけなら説明なしです。商品の `description` は文字列か `null` で、長さはSDKでは検証せずサーバーの判定（`invalid_input`）に任せます。
 
@@ -214,6 +215,186 @@ const withoutImage = await client.products.deleteImage(product.id);
 - 大きい画像のアップロードは10秒（`timeoutMs` の既定）で `timeout` になることがあります。必要なら `createManagementClient` の `timeoutMs` を延ばします（上限は120秒）。
 
 管理キーはサーバー環境変数のみに置き、ブラウザや `NEXT_PUBLIC_*` へ渡しません。
+
+## 機能フラグ（購入画面の作成・購入者の照会）
+
+販売者のアプリのログインユーザーに、機能フラグの商品（`access_type: 'feature'`）を買わせ、買ったかどうか・設定値を照会します。使う関数は `createCheckout`（購入画面を作る）・`getCustomerState`（付与済みの機能フラグをすべて返す）・`hasFeatureFlag`（特定の商品だけ確かめる）の3つです。
+
+| 使う場所 | 呼び方 |
+|---|---|
+| Next.js（15・16） | `@nulogic/cozeni-sdk/next` の3関数。キーと接続先を環境変数から読む |
+| それ以外のサーバー | `createManagementClient` の戻り値の同名のメソッド |
+
+以降の例は `/next` の関数名で書きます。それ以外のサーバーでは `cozeni.createCheckout(...)` のように読み替えます。
+
+### キーと環境変数
+
+管理画面の開発者設定でAPIキーを発行します。スコープは `checkouts:write`（購入画面を作る）と `customers:read`（購入者の機能フラグを確かめる）です。CLIのキーや導入用のプリセットには含まれず、CLIはこのキーを発行も保存もしません。
+
+- キーは**サーバーの環境変数 `COZENI_API_KEY` だけ**に置き、ブラウザ・リポジトリ・ログへ出しません。`NEXT_PUBLIC_*` に入れてはいけません。
+- サンドボックスのキー（`cozeni_sk_sandbox_` で始まる）は、**`COZENI_ENVIRONMENT=sandbox` と組**にします。ローカルの `.env`（Next.jsは `.env.local`）に置きます。本番のキーは本番の環境変数に置きます。サンドボックスのキーは本番の接続先では使えません（逆も同じです。上の「サンドボックス」）。
+
+```sh
+# .env.local（サンドボックス。.gitignore に入れる）
+COZENI_API_KEY=cozeni_sk_sandbox_…
+COZENI_ENVIRONMENT=sandbox
+```
+
+`/next` の3関数は、設定が足りないときに `CozeniError`（`code: 'invalid_input'`）を投げ、値を含まない理由をサーバーのログに1回出します。`COZENI_API_KEY` が空・未設定のとき、`NEXT_PUBLIC_COZENI_API_KEY` が設定されているとき（値が空でも。ブラウザに渡るキーなので使いません。消して失効させ、`COZENI_API_KEY` に設定し直します）、`COZENI_ENVIRONMENT` や `COZENI_API_ORIGIN` が不正なときです。
+
+それ以外のサーバーでは、同じ環境変数から作ります。
+
+```ts
+import {createManagementClient, type Environment} from '@nulogic/cozeni-sdk';
+
+// サーバー専用。
+const cozeni = createManagementClient({
+  apiKey: process.env.COZENI_API_KEY!,
+  // 'production'・'sandbox'、未指定（本番）。それ以外の値は渡さない
+  environment: (process.env.COZENI_ENVIRONMENT?.trim() || undefined) as
+    | Environment
+    | undefined,
+});
+```
+
+`COZENI_API_KEY!` は型の指定だけで、未設定の確認はしません。未設定のままでは、`/next` の3関数と違って理由のログは出ず、クライアントを作る時点（モジュールの読み込み時）に `CozeniError`（`code: 'invalid_input'`）を投げます。CLIも同じ環境変数名 `COZENI_API_KEY` を読む（保存したキーより優先）ので、アプリ用のキーを入れたシェルでCLIを使うと、CLIがそのキーを使います。アプリ用のキーを、CLIを動かすシェルへ書き出さないでください。
+
+### 前提（必ず読む）
+
+- **ログインのメールアドレスの本人確認を、アプリ側で済ませておく。** Cozeniの購入画面のメールアドレスは確認していません。未確認のメールアドレスでアカウントを作れると、他人の購入を自分のアカウントで使えてしまいます。ログインが無い、またはメールアドレスの本人確認が無いサイトでは、機能フラグを使わず購入者限定ページにします。
+- **判定と上限の管理はサーバーで行う。** 画面で隠すだけにせず、機能のAPI（Route Handler・Server Action）でも照会します。
+- 設定値（`metadata`）はアプリのサーバーだけが受け取ります。ただし管理画面とAPIの応答に平文で出るので、APIキーなどの秘密の置き場にはしません。
+- 機能フラグの商品は `access_url` を持ちません（応答では `null`）。商品の種類は `access_type` で判定します。
+
+### 購入画面を作る
+
+ログイン中のユーザーのメールアドレスで購入試行を作り、購入画面のURLを返します。購入画面ではメールアドレスを変更できないため、照会するメールアドレスとの食い違いを防げます。
+
+```ts
+import {createCheckout} from '@nulogic/cozeni-sdk/next';
+import {redirect} from 'next/navigation';
+
+// Server Action または Route Handler
+const checkout = await createCheckout({
+  productId: process.env.COZENI_PRO_PRODUCT_ID!,
+  email: session.user.email, // ログイン中のユーザーのメールアドレス
+});
+redirect(checkout.url); // checkout.expiresAt（作成から30分）を過ぎたら作り直す
+```
+
+URLは購入者本人にだけ渡します。すでに購入済みで購入制限に達していると `CozeniError`（`code: 'already_purchased'`、`status: 409`）になるので、「購入済み」として扱います。ほかに `product_not_found`（`status: 404`。存在しない、ほかの販売者の、または別の環境の商品ID）・`creator_not_ready`（販売の準備が未完了）・`product_archived` / `checkout_link_disabled`（販売できない商品）があります。
+
+**サンドボックスの購入画面は、販売者本人のメールアドレスにだけ作れます。** ほかのメールアドレスでは `CozeniError`（`code: 'sandbox_recipient_not_allowed'`、`status: 422`）になります。試すときは、販売者本人のメールアドレスのアカウントでログインします。
+
+### 購入者の機能フラグを照会する
+
+```ts
+import {getCustomerState, hasFeatureFlag} from '@nulogic/cozeni-sdk/next';
+
+// 付与済みの機能フラグをすべて
+const state = await getCustomerState({email: session.user.email});
+// => { customerId: string | null, featureFlags: [{ productId, benefitId, grantedAt, metadata }] }
+
+// 特定の商品だけ。無ければ { granted: false, metadata: {} }
+const {granted, metadata} = await hasFeatureFlag({
+  email: session.user.email,
+  productId: process.env.COZENI_PRO_PRODUCT_ID!,
+});
+```
+
+メールアドレスはURLではなくPOSTの本文で送り、エラーにも保持しません。購入者・権利が無いときも成功（`customerId: null`・空配列）で、購入の有無の判定には使えません（`customerId` は機能フラグの権利が1件以上あるときだけ入ります）。照会の失敗（認証・レート制限・通信など）は握りつぶさず `CozeniError` で投げます。レート制限は `code: 'rate_limited'` と `retryAfterSeconds` で返ります。SDKは自動で再送しません。
+
+### 上限をサーバーで数えて止める
+
+設定値は上限などに使い、使った量はアプリのサーバーで数えます。
+
+```ts
+import {CozeniError, hasFeatureFlag} from '@nulogic/cozeni-sdk/next';
+
+export async function POST(request: Request) {
+  const user = await requireLoginUser(request); // 本人確認済みのメールアドレス
+  let flag: Awaited<ReturnType<typeof hasFeatureFlag>> = {
+    granted: false,
+    metadata: {},
+  };
+  try {
+    flag = await hasFeatureFlag({
+      email: user.email,
+      productId: process.env.COZENI_PRO_PRODUCT_ID!,
+    });
+  } catch (error) {
+    // 照会の上限（rate_limited）は、機能を使わせない側（無料枠）に倒す。ほかの失敗は握りつぶさない
+    if (!(error instanceof CozeniError && error.code === 'rate_limited'))
+      throw error;
+  }
+  const {granted, metadata} = flag;
+  const limit =
+    granted && typeof metadata.daily_messages === 'number'
+      ? metadata.daily_messages
+      : FREE_DAILY_MESSAGES;
+  if ((await countTodayMessages(user.id)) >= limit)
+    return Response.json({error: 'limit_reached'}, {status: 429});
+  // ここから先が機能の本体
+}
+```
+
+### 結果のキャッシュ（60秒まで）
+
+同じ購入者の結果は、最大60秒キャッシュしてかまいません。照会はリクエストごとに行いうるので、サーバーのメモリなどで短く持ちます。**キャッシュするのは付与済み（`granted: true`）の結果だけです。** 未購入の結果を残すと、購入した直後の最大60秒、購入済みなのに未購入と判定されます。剥奪の反映は、キャッシュの期限の60秒以内です。
+
+```ts
+type Flag = Awaited<ReturnType<typeof hasFeatureFlag>>;
+const MAX_ENTRIES = 1000;
+// 期限はすべて同じ60秒なので、Mapの挿入順が期限の順になる。
+const cache = new Map<string, {expires: number; value: Flag}>();
+
+function remember(key: string, value: Flag) {
+  const now = Date.now();
+  cache.delete(key); // 入れ直して、末尾（いちばん新しい）に置く
+  for (const [oldKey, entry] of cache) {
+    if (entry.expires > now) break; // 先頭から、期限切れだけを消す
+    cache.delete(oldKey);
+  }
+  while (cache.size >= MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest); // 最大件数を超えたら古いものから消す
+  }
+  cache.set(key, {expires: now + 60_000, value});
+}
+
+async function cachedHasFeatureFlag(
+  email: string,
+  productId: string,
+): Promise<Flag> {
+  const key = `${productId}:${email.trim().toLowerCase()}`;
+  const hit = cache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  const value = await hasFeatureFlag({email, productId}); // 失敗は投げるので残らない
+  if (value.granted) remember(key, value);
+  else cache.delete(key); // 期限切れの古い付与済みの結果を残さない
+  return value;
+}
+```
+
+未購入の結果はキャッシュしないので、未購入のユーザーの照会は毎回APIに届きます。照会はキーごとに600回/分が上限で、超えると `rate_limited`（`retryAfterSeconds` を見る）になります。そのときは機能を使わせない側に倒します（上の上限の例なら、`CozeniError` の `code === 'rate_limited'` を `catch` して、無料枠の上限で判定します）。
+
+キャッシュはサーバーのメモリだけに置き、メールアドレスをログや外部のストア・分析に出さないでください。
+
+### 購入直後は照会し直す
+
+権利は決済の完了後に作られるため、購入完了ページへ戻った直後は数秒だけ照会に出ないことがあります。見つからなければ、数秒おきに数回だけ照会し直します（キャッシュは使いません）。
+
+```ts
+async function waitForFeatureFlag(email: string, productId: string) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const result = await hasFeatureFlag({email, productId});
+    if (result.granted) return result;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  return {granted: false, metadata: {}}; // まだ反映されていない。あとで案内する
+}
+```
 
 ## 購入者API
 
@@ -354,9 +535,10 @@ export function GET() {
 | `handleCozeniHandoff(request, options?)` / `clearCozeniHandoff(request, response)` | 既存のmiddleware / proxyと組み合わせる用。前者はコードの交換だけを行い `Response \| undefined` を返す。後者は既存の応答に印の消去を足す |
 | `requireEntitlement(productId)` | page専用。権利が無ければ `enter_url` へリダイレクトする。`cozeni_handoff` の印があればリダイレクトせず `AccessDenied` を投げる（印が `unavailable` なら理由も `unavailable`） |
 | `entitlement(productId)` / `denialResponse(result, productId)` | Route Handler・Server Action用。リダイレクトしない |
+| `createCheckout({productId, email})` / `getCustomerState({email})` / `hasFeatureFlag({email, productId})` | Route Handler・Server Action用。機能フラグの購入画面の作成と購入者の照会（上の「機能フラグ」）。キーは環境変数 `COZENI_API_KEY`、接続先は `COZENI_ENVIRONMENT` から決める。設定が不正なら `invalid_input`。`NEXT_PUBLIC_COZENI_API_KEY` があれば使わずに拒否する |
 | `portalRedirect(creatorId, options?)` | Route Handler用。購入者ポータルへのリンクを発行して302で送る。このサイトで入場していなければ、コード無しのその販売者のポータル（Cozeniが確認コードでの入場へ進める）へ302。発行できなければ503（応答が合わない、たとえば返ったURLの販売者やオリジンが違うときは、クリエイターIDと `COZENI_ENVIRONMENT` の確認を促す固定文をサーバーのログに出す）。`COZENI_API_ORIGIN` で独自の接続先を使うときは購入者面のオリジンが分からないので、入場していなければ401を返す |
 
-戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
+戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**購入者限定ページだけなら、本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** 機能フラグを使うサイトは、これに加えて `COZENI_API_KEY`（サーバーだけに置くAPIキー）が必要です（上の「機能フラグ」の「キーと環境変数」）。APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
 
 **リダイレクトするのはpageの入口だけです。** `requireEntitlement()` はnext/navigationの `redirect()`（制御フロー例外）を投げることがあります。呼び出しは `AccessDenied` だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。**Route Handler（JSON API）**は `entitlement()` の結果を `denialResponse()` へ渡し、401/403/503のJSONへ `enter_url` を含めます。**Server Action**はWeb Responseを返さず、`entitlement()` の結果の理由をplain objectとして返します。
 

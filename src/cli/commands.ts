@@ -454,6 +454,8 @@ export async function createProduct(
         item.status === "active" &&
         item.name === product.name &&
         item.price_jpy === product.price_jpy &&
+        // URLを持たない商品（feature・file）は限定ページの商品と同じにならない。
+        item.access_url !== null &&
         sameUrl(item.access_url, product.access_url),
     );
     if (same) {

@@ -11,10 +11,13 @@ import { NextResponse } from "next/server";
 import {
   type ClientOptions,
   CozeniError,
+  type CustomerState,
   createCustomerClient,
+  createManagementClient,
   customerCookie,
   type Entitlement,
   enterRedirectUrl,
+  type FeatureFlagMetadata,
   trustedSiteUrl,
 } from "./index.js";
 import {
@@ -27,7 +30,11 @@ import {
 // "next/headers" / "next/navigation" はNext.js本体がpackage.jsonにexportsを
 // 持たないため、素のNode ESM importでは解決できない（README参照）。
 
-export type { Entitlement } from "./index.js";
+export type {
+  CustomerState,
+  Entitlement,
+  FeatureFlagMetadata,
+} from "./index.js";
 export { CozeniError, enterRedirectUrl } from "./index.js";
 
 // 許可以外（拒否・unavailable）のEntitlement。
@@ -479,4 +486,65 @@ export async function portalRedirect(
       { status: 503, headers: privateHeaders },
     );
   }
+}
+
+const API_KEY_MISSING =
+  "[cozeni] COZENI_API_KEY が設定されていません。管理画面の開発者設定で発行したキーを、サーバーの環境変数に設定してください。";
+const API_KEY_EXPOSED =
+  "[cozeni] NEXT_PUBLIC_COZENI_API_KEY はブラウザに渡ります。キーを消して失効させ、COZENI_API_KEY（NEXT_PUBLIC_ を付けない）に設定し直してください。";
+
+/**
+ * 環境変数のAPIキーと接続先から、管理クライアントを作る。
+ * 設定不備はCozeniError("invalid_input")で投げ、値を含まない固定文をログに1回出す。
+ * NEXT_PUBLIC_COZENI_API_KEY が設定されていれば（値が空でも）、ブラウザへ渡るキーなので使わない。
+ */
+function managementClientFromEnv(): ReturnType<typeof createManagementClient> {
+  if (process.env.NEXT_PUBLIC_COZENI_API_KEY !== undefined) {
+    console.error(API_KEY_EXPOSED);
+    throw new CozeniError("invalid_input");
+  }
+  const apiKey = process.env.COZENI_API_KEY?.trim();
+  if (!apiKey) {
+    console.error(API_KEY_MISSING);
+    throw new CozeniError("invalid_input");
+  }
+  // 接続先の不備は apiOrigin() が理由をログに出す。
+  const origin = apiOrigin();
+  if (!origin) throw new CozeniError("invalid_input");
+  return createManagementClient({ apiKey, apiOrigin: origin });
+}
+
+/**
+ * ログイン中のユーザーのメールアドレスを固定した購入画面を作る（機能フラグの商品を売る入口）。
+ * キーは環境変数 COZENI_API_KEY、接続先は COZENI_ENVIRONMENT・COZENI_API_ORIGIN から決める。
+ * 返したURLは購入者本人にだけ渡す。有効期限は30分で、過ぎたら作り直す。
+ * サーバー（Route Handler・Server Action）からだけ呼ぶこと。
+ */
+export async function createCheckout(input: {
+  productId: string;
+  email: string;
+}): Promise<{ checkoutId: string; url: string; expiresAt: string }> {
+  return managementClientFromEnv().createCheckout(input);
+}
+
+/**
+ * メールアドレスの購入者が持つ機能フラグを返す。無ければ customerId は null で、一覧は空。
+ * キーと接続先は環境変数から決める（`createCheckout` と同じ）。
+ */
+export async function getCustomerState(input: {
+  email: string;
+}): Promise<CustomerState> {
+  return managementClientFromEnv().getCustomerState(input);
+}
+
+/**
+ * 購入者がその商品の機能フラグを持つか。無ければ `{ granted: false, metadata: {} }`。
+ * 照会の失敗（認証・レート制限・通信など）は握りつぶさず投げる。
+ * キーと接続先は環境変数から決める（`createCheckout` と同じ）。
+ */
+export async function hasFeatureFlag(input: {
+  email: string;
+  productId: string;
+}): Promise<{ granted: boolean; metadata: FeatureFlagMetadata }> {
+  return managementClientFromEnv().hasFeatureFlag(input);
 }
