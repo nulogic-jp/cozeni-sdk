@@ -11,7 +11,11 @@ import {
   resolveProfile,
   session,
 } from "./api.js";
-import type { CommandContext, Output } from "./commands.js";
+import {
+  type CommandContext,
+  type Output,
+  unrefundedTestPurchases,
+} from "./commands.js";
 import { CliError } from "./errors.js";
 import type { Config, Store } from "./store.js";
 
@@ -34,7 +38,17 @@ export const SWITCHED_NEXT_STEP = [
   "テストで確定した商品名・価格・限定にする内容のまま、本番で同じ内容の商品を作ります（利用者に聞き直さない。同じ内容の商品が本番にあれば、作らずにそれが返ります）。",
   '`npx cozeni products create --name "<商品名>" --price <円> --access-url "<本番のサイトのアドレス>/<限定ページのパス>" --yes --json` を実行し、コード中の商品IDと購入リンクを本番のものに差し替え、`COZENI_ENVIRONMENT` を外してください。',
   "本番では決済を試さず、購入していない状態で限定ページが Cozeni の入場画面（enter_url）へリダイレクトされるところまでを確かめ、報告します。",
+  "機能フラグの商品なら、`--access-url` の代わりに `--feature` と同じ `--metadata` で作り、利用者に本番の開発者設定でキーの発行と本番の環境変数 `COZENI_API_KEY` への設定を頼みます（`COZENI_ENVIRONMENT` は外す）。本番ではテスト購入をせず、購入していないユーザーで機能の API が 403 になるところまでを確かめます。",
 ].join("\n");
+
+/** 切り替えの案内。サンドボックスに返金していない機能フラグのテスト購入があれば、先にその返金を頼む。 */
+export async function switchedNextStep(store: Store): Promise<string> {
+  const refunds = (await unrefundedTestPurchases(store, "sandbox")).map(
+    (id) =>
+      `先に、サンドボックスのテスト購入を返金します: \`${CLI} test-purchase --product ${id} --refund --profile sandbox --json\``,
+  );
+  return [...refunds, SWITCHED_NEXT_STEP].join("\n");
+}
 
 /**
  * 本番にログイン済みで一致しているときの案内。黙って切り替えず、利用者の許可を確かめさせる。
@@ -148,6 +162,7 @@ export async function switchToProduction(
   if (actual !== profile.expectedCreatorId)
     throw creatorMismatch(profile, actual, current.source);
   const changed = previous !== "production";
+  const nextStep = await switchedNextStep(store);
   if (changed && !(await setDefaultToProduction(store, actual)))
     throw new CliError(
       "invalid_state",
@@ -161,13 +176,13 @@ export async function switchToProduction(
       previous_profile: previous,
       creator_id: actual,
       environment: "production",
-      next_step: SWITCHED_NEXT_STEP,
+      next_step: nextStep,
     },
     human: [
       changed
         ? "既定の接続先を本番に切り替えました。"
         : "既定の接続先はすでに本番です。",
-      SWITCHED_NEXT_STEP,
+      nextStep,
     ],
   };
 }

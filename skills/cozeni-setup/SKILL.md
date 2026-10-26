@@ -1,6 +1,6 @@
 ---
 name: cozeni-setup
-description: Cozeni（@nulogic/cozeni-sdk）で有料コンテンツを販売する作業全般で使う。サイトへの購入ボタンと購入者限定ページの導入、商品の作成・価格や限定ページの変更、購入リンクの取得、「買えない」「もう売れる？」「審査は通った？」など販売状態の確認と原因の調査を扱う。
+description: Cozeni（@nulogic/cozeni-sdk）で有料コンテンツを販売する作業全般で使う。サイトへの購入ボタンと購入者限定ページの導入、アプリの機能を購入者だけに開く機能フラグの導入、商品の作成・価格や限定ページの変更、購入リンクの取得、「買えない」「もう売れる？」「審査は通った？」など販売状態の確認と原因の調査を扱う。
 license: MIT
 metadata:
   cozeni-sdk-version: ">=0.8.0 <0.9.0"
@@ -71,14 +71,22 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 5. 商品を決める
 
+**有料にしたいのがアプリの機能なら、先にサイトを読み、(1) ログインがあり (2) ログインのメールアドレスの本人確認（確認メールのリンクなど）が済んでいるかを確かめる。** どちらかが無ければ「機能フラグにはログインとメールアドレスの本人確認が要ります（無いと、他人のメールで登録して購入を使い回せます）」と利用者に伝え、購入者限定ページで進める。ログイン機能は作らない。1回の導入で組み込むのは、購入者限定ページか機能フラグのどちらか一方。
+
 `status` の `data.products` を見て、利用者に何を売るかを確かめる。
 
 - **既存の商品を使う**：`npx cozeni products get <商品ID> --json` で内容と購入リンクを確かめる。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx cozeni link <商品ID> --json` で発行する。
-- **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`）を、利用者に1回でまとめて確認する（サンドボックスから始めるときは、3 の売上の受け取り先の登録の依頼と、本番の公開アドレスの確認も同じ1通に入れる）。同意を得たら次を実行する。
+- **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・有料にする機能か購入後に見せるページか・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`。機能なら、代わりに上限などの設定値）を、利用者に1回でまとめて確認する（サンドボックスから始めるときは、3 の売上の受け取り先の登録の依頼と、本番の公開アドレスの確認も同じ1通に入れる）。同意を得たら次を実行する。
 
   ```sh
   npx cozeni products create --name "<商品名>" --price <円> --access-url "<URL>" --yes --json
   ```
+
+  - 機能フラグの商品は、`--access-url` の代わりに `--feature` と設定値を渡す（種類は作成後に変えられない。設定値の値は `true`/`false`・数値・文字列）。成功の `data.next_step` のとおり、利用者にキーの発行を頼む。
+
+    ```sh
+    npx cozeni products create --name "<商品名>" --price <円> --feature --metadata key=value --yes --json
+    ```
 
   - 同じ内容の有効な商品がすでにあれば、作らずにそれを返す（`data.reused: true`、`data.reason: "same_product_exists"`）。それを使う。`data.checkout_link` が `null` なら、利用者に確認してから `data.next_step` の `link` を実行する。
   - `--allow-duplicate` は、利用者が同じ内容の別の商品をはっきり求めたときだけ付ける。
@@ -91,9 +99,10 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 - **Next.js（App Router）**：[references/nextjs.md](references/nextjs.md)
 - **それ以外の JavaScript / TypeScript サーバー**：[references/javascript-server.md](references/javascript-server.md)
+- **機能フラグ**：上の資料の「機能フラグ」節に従う。`data.next_step` のとおり、利用者に API キー（「購入画面を作る」「購入者の機能フラグを確かめる」の2権限）の発行と、環境変数 `COZENI_API_KEY` への設定を頼み、**入れたと返事があるまで待つ**。キーの値は読まない・書かない・表示しない。**機能フラグの導入では、AI は `.env.local` を開かない・編集しない。** キーも `COZENI_ENVIRONMENT=sandbox`（サンドボックスのとき）も、利用者がキーと同じ場所に入れる。`COZENI_SITE_ORIGIN` は書かせない（機能フラグの3関数は読まない）。確かめるのは `grep -c '^COZENI_API_KEY=' .env.local` だけ。
 - 静的ファイルだけのサイトでは限定ページを守れない。サーバーの処理（SSR・serverless function・Worker など）が無ければ、作業を止めて利用者に説明する。
 
-手元の環境変数（例：`.env.local`）に `COZENI_SITE_ORIGIN=<siteOrigin>` を設定する。`status` の `data.environment` が `sandbox` なら、`COZENI_ENVIRONMENT=sandbox` も設定する（無いとサイトが本番の Cozeni に問い合わせ、サンドボックスの商品の購入者を認められない）。サイトに必要な環境変数はこれだけで、API キーは使わない。
+**購入者限定ページのとき**は、手元の環境変数（例：`.env.local`）に `COZENI_SITE_ORIGIN=<siteOrigin>` を設定する。`status` の `data.environment` が `sandbox` なら、`COZENI_ENVIRONMENT=sandbox` も設定する（無いとサイトが本番の Cozeni に問い合わせ、サンドボックスの商品の購入者を認められない）。購入者限定ページのサイトに必要な環境変数はこれだけで、API キーは使わない。機能フラグは上のとおり `.env.local` に触れず、`COZENI_API_KEY` と `COZENI_ENVIRONMENT` は利用者が入れる。
 
 ### 7. 動作確認
 
@@ -102,9 +111,21 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 - **限定ページ**：Cozeni の再入場画面（`enter_url`）へリダイレクトされる。例：`curl -sI <siteOrigin>/<限定ページ>` で 3xx と、`Location` が Cozeni の `/enter?product_id=<商品ID>` であること。
 - **Route Handler など JSON を返す入口**：リダイレクトせず、401（未ログイン）・403（未購入・取り消し）・503（一時障害）の JSON を返す。例：`curl -si <siteOrigin>/api/<パス>`。
 - **Server Action**：Response やリダイレクトではなく、拒否を示す通常の値（例：`{ ok: false, reason: "no_session" }`）を返す。画面から操作するか、テストで確かめる。
+- **機能フラグ**：次を確かめる（キーの値は表示しない）。
+  - `grep -c '^COZENI_API_KEY=' .env.local` で行があるかだけを確かめる。`.env*` が `.gitignore` に入っている。`NEXT_PUBLIC_` で始まるキーの環境変数が無い。
+  - キーの確認：
+
+    ```sh
+    node --env-file=.env.local --input-type=module -e 'const { createManagementClient } = await import("@nulogic/cozeni-sdk"); try { await createManagementClient({ apiKey: process.env.COZENI_API_KEY, environment: process.env.COZENI_ENVIRONMENT || undefined, apiOrigin: process.env.COZENI_API_ORIGIN || undefined }).createCheckout({ productId: "<商品ID>", email: "cozeni-key-check@example.com" }); console.log("201") } catch (e) { console.log(e.status, e.code) }'
+    ```
+
+    サンドボックスは `422 sandbox_recipient_not_allowed`、それ以外は `201` で合格（`apiOrigin` を渡さないと、staging・開発でも本番の API へ送って 401 になる）。`0 invalid_input` はキーが読めていない（`.env.local` に行が無い・空）。`401`（キー・環境の取り違え）・`403`（権限不足）・`404`（商品ID）は、利用者にキーの発行し直しか設定を頼む。
+  - 未購入（ログインなし・ログインあり）で機能の API が 401・403 になることを `curl` で確かめる。
 - プロジェクトにビルド・型検査・lint・テストのコマンドがあれば実行する。
 
 ### 8. テスト購入（`test-purchase`。サンドボックスだけ）
+
+**機能フラグの商品は `--site-origin` なし**で `npx cozeni test-purchase --product <prd_…> --json` を実行する。付与と設定値を確かめるだけで、**返金はしない**。`data.next_step` のとおり、利用者本人（Cozeni のアカウントのメールアドレス）のアカウントでアプリにログインして機能が使えることを確かめてもらい（サンドボックスで購入画面を作れるのは利用者本人のメールだけで、ほかは `sandbox_recipient_not_allowed`）、返事のあとに `npx cozeni test-purchase --product <prd_…> --refund --json` で返金する。このあとの `--site-origin` を使う手順は限定ページの商品のもの。終了コード6（`authorization_pending`）の打ち直しは、機能フラグにも当てはまる。
 
 開発サーバーを起動したまま、`npx cozeni test-purchase --product <prd_…> --site-origin <開発サーバーのアドレス> --json` を実行する。**サーバーがテストカードで決済を確定させ、CLI が限定ページに入れることと、未購入では `enter_url` へ送られることを確かめて返金する。** ワンタイムコードは出力されない。決済画面は操作しない。`--site-origin` は `localhost`・`127.0.0.1`・`[::1]` のアドレスに限る。本番（`production` プロファイル）では動かない。
 
@@ -120,7 +141,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ### 9. 本番への切り替え
 
-利用者が本番への導入を許可したら、`npx cozeni login --profile production --json` を実行し、本番の承認URLとコードを渡して許可してもらう。許可されなかったら本番へは進まず、テスト用の環境のまま終える。
+利用者が本番への導入を許可したら、**まず `npx cozeni status --json` の `data.warnings` に `test_purchase_not_refunded` があれば、`data.unrefunded_test_purchases` の商品を `--refund` で返金する。** そのあと `npx cozeni login --profile production --json` を実行し、本番の承認URLとコードを渡して許可してもらう。許可されなかったら本番へは進まず、テスト用の環境のまま終える。機能フラグは、本番へのログインと切り替えの後に、本番でも `--feature` で商品を作る。本番のキーは利用者が本番の開発者設定で発行して本番の環境変数に入れる。
 
 - 承認の返事を待ち、`npx cozeni login --complete --profile production --json` を実行する。本番のアカウントが `init` で覚えたものと一致すれば、CLI が既定の接続先を本番に書き換える（`data.switched_to_production: true`）。別のアカウントなら `creator_mismatch` で止まり、切り替えない。
 - 本番にログイン済みで一致しているときは、承認URLは出ない。本番への導入はすでに許可を得ているので、`npx cozeni switch --json` で切り替える。
@@ -136,8 +157,9 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 1. **サンドボックスを通らず本番に直接つないだときは、テスト購入をしていないことを最初に書く。**
 2. **`data.message_for_user` の各行を、言い換えずにそのまま書く**（販売できるなら「すぐ販売できます。」）。
-3. 公開先の設定：「公開しているサイトの環境変数に `COZENI_SITE_ORIGIN=<公開中のアドレス>` を設定してください。未設定だと、購入後に限定ページを開けません」。設定やデプロイは利用者が行う。自分では行わない。
-4. したこと（商品・購入リンク・変更したファイル）と、確かめたこと・確かめられなかったこと。追加されたファイル（`.agents/skills/` など）はプロジェクトと一緒にコミットするよう伝える。
+3. **機能フラグのときは、「利用者がやること」の先頭に、本番のキーの発行と本番の環境変数 `COZENI_API_KEY` への設定を書く。** 管理画面の商品編集で購入完了ページの URL を設定すると、購入後にアプリへ戻せる（未設定でも Cozeni の完了画面が「サービスに戻ってご利用ください」と出す）。
+4. 公開先の設定（購入者限定ページのときだけ。機能フラグには不要）：「公開しているサイトの環境変数に `COZENI_SITE_ORIGIN=<公開中のアドレス>` を設定してください。未設定だと、購入後に限定ページを開けません」。設定やデプロイは利用者が行う。自分では行わない。
+5. したこと（商品・購入リンク・変更したファイル）と、確かめたこと・確かめられなかったこと。追加されたファイル（`.agents/skills/` など）はプロジェクトと一緒にコミットするよう伝える。
 
 ## 確認が必要な操作
 
@@ -173,7 +195,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ## してはいけないこと
 
-- ログインで保存されたキー（`~/.config/cozeni/credentials.json`）を読まない。サイトのコード・`.env`・本番の環境変数にキーを書かない。本番のサイトはキーを使わない。
+- ログインで保存されたキー（`~/.config/cozeni/credentials.json`）を読まない。CLI のキーはサイトに書かない。機能フラグの商品だけは、利用者が発行した2権限のキーを利用者自身が `COZENI_API_KEY` に入れる（AI は値を読まない・書かない・`NEXT_PUBLIC_` にしない）。
 - 商品IDや購入リンクを推測で書かない。CLI の出力を使う。
 - 利用者の同意なしに `--yes` を付けない。公開、デプロイ、本番の環境変数の変更をしない。
 - 決済画面を操作しない。テスト購入は `test-purchase` のコマンドでだけ行う。本番で実際の課金をしない。

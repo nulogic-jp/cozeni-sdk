@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -12,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type CliContext, run } from "../src/cli/run.js";
 import { satisfies, skillRange } from "../src/cli/skill-version.js";
 import { createStore } from "../src/cli/store.js";
+import { fixture } from "./fixtures/external-api-v1.literal.js";
 
 const API = "https://api.cozeni.net";
 const APP = "https://cozeni.net";
@@ -990,6 +992,187 @@ describe("products", () => {
     });
     expect(t.calls.some((call) => call.method !== "GET")).toBe(false);
   });
+  describe("機能フラグ（--feature）", () => {
+    const featureId = fixture.feature_product.id;
+    const featureArgs = [
+      "products",
+      "create",
+      "--name",
+      "AIチャット Pro プラン",
+      "--price",
+      "980",
+      "--feature",
+      "--metadata",
+      "daily_messages=100",
+      "--metadata",
+      "plan=pro",
+      "--metadata",
+      "beta=true",
+    ];
+    const featureServer = (overrides: Partial<Record<string, Handler>> = {}) =>
+      server({
+        "POST /products": () => json(fixture.feature_product, 201),
+        [`PUT /products/${featureId}/checkout-link`]: () =>
+          json({ ...link, product_id: featureId }),
+        ...overrides,
+      });
+    it("access_type: feature と型つきの設定値を送り、確認の文に種類を示す", async () => {
+      await saveLogin();
+      const t = cli(featureServer());
+      expect((await t.run(...featureArgs, "--yes", "--json")).code).toBe(0);
+      const post = t.calls.find((call) => call.method === "POST");
+      expect(post?.body).toEqual({
+        name: "AIチャット Pro プラン",
+        price_jpy: 980,
+        access_type: "feature",
+        metadata: { daily_messages: 100, plan: "pro", beta: true },
+      });
+      const unconfirmed = cli(featureServer());
+      await unconfirmed.run(...featureArgs, "--json");
+      expect(unconfirmed.parsed().error.message).toContain(
+        "種類: 機能フラグ（設定値: daily_messages=100, plan=pro, beta=true）。種類は作成後に変えられません。",
+      );
+    });
+    it("--feature と --access-url の両方・どちらも無しは invalid_input で、通信しない", async () => {
+      await saveLogin();
+      for (const args of [
+        [...featureArgs, "--access-url", "https://site.example/members"],
+        ["products", "create", "--name", "x", "--price", "980"],
+        [
+          "products",
+          "create",
+          "--name",
+          "x",
+          "--price",
+          "980",
+          "--access-url",
+          "https://site.example/members",
+          "--metadata",
+          "a=1",
+        ],
+      ]) {
+        const t = cli(featureServer());
+        expect((await t.run(...args, "--yes", "--json")).code).toBe(2);
+        expect(t.parsed().error.code).toBe("invalid_input");
+        expect(t.calls).toHaveLength(0);
+      }
+    });
+    it.each([["a=1", "a=2"], ["noequals"], ["=1"], ["__proto__=1"]])(
+      "--metadata %s は invalid_input",
+      async (...values) => {
+        await saveLogin();
+        const t = cli(featureServer());
+        const args = [
+          "products",
+          "create",
+          "--name",
+          "x",
+          "--price",
+          "980",
+          "--feature",
+          ...values.flatMap((value) => ["--metadata", value]),
+        ];
+        expect((await t.run(...args, "--yes", "--json")).code).toBe(2);
+        expect(t.parsed().error.code).toBe("invalid_input");
+        expect(t.calls).toHaveLength(0);
+      },
+    );
+    it("同じ名前・価格・設定値（順序違い）の機能フラグの商品があれば作らずに返す", async () => {
+      await saveLogin();
+      const t = cli(
+        featureServer({
+          "GET /products?limit=100": () =>
+            json({
+              items: [
+                {
+                  ...fixture.feature_product,
+                  metadata: { beta: true, plan: "pro", daily_messages: 100 },
+                },
+              ],
+              next_cursor: null,
+            }),
+          [`GET /products/${featureId}/checkout-link`]: () =>
+            json({ ...link, product_id: featureId }),
+        }),
+      );
+      expect((await t.run(...featureArgs, "--json")).code).toBe(0);
+      expect(t.parsed().data).toMatchObject({
+        product: { id: featureId },
+        reused: true,
+      });
+      expect(t.calls.some((call) => call.method === "POST")).toBe(false);
+    });
+    it("設定値が違う機能フラグの商品は重複とみなさない", async () => {
+      await saveLogin();
+      const t = cli(
+        featureServer({
+          "GET /products?limit=100": () =>
+            json({
+              items: [
+                {
+                  ...fixture.feature_product,
+                  metadata: { daily_messages: 200, plan: "pro", beta: true },
+                },
+              ],
+              next_cursor: null,
+            }),
+        }),
+      );
+      expect((await t.run(...featureArgs, "--yes", "--json")).code).toBe(0);
+      expect(t.parsed().data.reused).toBe(false);
+    });
+    it("購入者限定ページの冪等キーのハッシュは従来と同じ", async () => {
+      await saveLogin();
+      const hash = createHash("sha256")
+        .update(
+          JSON.stringify([
+            "production",
+            "crt_1",
+            "ハンドブック",
+            1000,
+            "https://site.example/members",
+          ]),
+        )
+        .digest("hex");
+      await createStore({ XDG_CONFIG_HOME: home }).savePending(`idem-${hash}`, {
+        version: 1,
+        idempotency_key: "fixed-key-0001",
+        created_at: "2026-09-25T00:00:00.000Z",
+        expires_at: "2026-09-26T00:00:00.000Z",
+      });
+      const t = cli(server());
+      await t.run(...createArgs, "--yes", "--json");
+      const post = t.calls.find((call) => call.method === "POST");
+      expect(post?.headers.get("Idempotency-Key")).toBe("fixed-key-0001");
+    });
+    it("作成の next_step は開発者設定のURLと COZENI_API_KEY を含み、キーの値を含まない", async () => {
+      await saveLogin();
+      const t = cli(featureServer());
+      await t.run(...featureArgs, "--yes", "--json");
+      const { next_step: step, checkout_link: checkout } = t.parsed().data;
+      expect(step).toContain(`${APP}/settings/developer`);
+      expect(step).toContain("購入画面を作る");
+      expect(step).toContain("購入者の機能フラグを確かめる");
+      expect(step).toContain("COZENI_API_KEY");
+      expect(step).not.toContain("COZENI_ENVIRONMENT");
+      expect(step).not.toContain(token.api_key);
+      expect(checkout.url).toBe(link.url);
+      const human = await cli(featureServer()).run(...featureArgs, "--yes");
+      expect(human.out).toContain("購入ボタンには使わず");
+    });
+    it("サンドボックスでは next_step に COZENI_ENVIRONMENT=sandbox も案内する", async () => {
+      await saveLogin();
+      const t = cli(
+        featureServer({
+          "GET /account": () => json({ ...account, environment: "sandbox" }),
+        }),
+      );
+      // サンドボックスかどうかは、接続先のAPIが返す environment で決める。
+      const result = await t.run(...featureArgs, "--yes", "--json");
+      expect(result.code).toBe(0);
+      expect(t.parsed().data.next_step).toContain("COZENI_ENVIRONMENT=sandbox");
+    });
+  });
   it("アーカイブ済みや内容の違う商品は重複とみなさない", async () => {
     await saveLogin();
     const t = cli(
@@ -1196,6 +1379,32 @@ describe("status", () => {
       expires_at: token.expires_at,
     });
     expect(data.warnings).toEqual([]);
+  });
+  it("機能フラグ・ファイルの商品を null と出さずに種類で表示する", async () => {
+    await saveLogin();
+    const fileProduct = {
+      ...product,
+      id: "prd_file",
+      name: "資料集",
+      access_type: "file",
+      access_url: null,
+    };
+    const t = cli((call) =>
+      call.path.endsWith("/account")
+        ? json(account)
+        : json({
+            items: [fixture.feature_product, fileProduct],
+            next_cursor: null,
+          }),
+    );
+    const { out } = await t.run("status");
+    expect(out).not.toContain("null");
+    expect(out).toContain(
+      "機能フラグ（設定値: daily_messages=100, plan=pro, beta=true）",
+    );
+    expect(out).toContain("- prd_file 資料集 1,000円 ファイル");
+    const list = await t.run("products", "list");
+    expect(list.out).not.toContain("null");
   });
   it("利用者にそのまま見せる次にやることを返す", async () => {
     await saveLogin();

@@ -758,10 +758,24 @@
           },
           "expires_in": {
             "type": "integer"
+          },
+          "access_type": {
+            "type": "string",
+            "enum": ["page", "feature", "file"]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ExternalFeatureFlagMetadata"
           }
         },
-        "required": ["status", "handoff_code", "expires_in"],
-        "additionalProperties": false
+        "required": [
+          "status",
+          "handoff_code",
+          "expires_in",
+          "access_type",
+          "metadata"
+        ],
+        "additionalProperties": false,
+        "description": "購入権がある。判定には access_type を使う。feature の metadata は付与された設定値（page・file は {}）。"
       },
       "ExternalTestPurchasePending": {
         "type": "object",
@@ -2580,7 +2594,7 @@
         ],
         "responses": {
           "200": {
-            "description": "購入権がある。入場の確認用のワンタイムコードを含む。",
+            "description": "購入権がある。入場の確認用のワンタイムコード（限定ページの商品のみ）と、商品の種類（access_type）・付与された設定値（metadata）を含む。",
             "content": {
               "application/json": {
                 "schema": {

@@ -39,14 +39,15 @@ import {
   FLOW_UNKNOWN_HINT,
   flowUnknown,
   SWITCH_ABORTED_NEXT_STEP,
-  SWITCHED_NEXT_STEP,
   setDefaultToProduction,
+  switchedNextStep,
   switchesToProduction,
   switchToProduction,
 } from "./switch.js";
 import {
   assertNotProductionApi,
   assertTestPurchaseAllowed,
+  refundTestPurchase,
   testPurchase,
 } from "./test-purchase.js";
 
@@ -89,10 +90,12 @@ const commands: Record<string, string[]> = {
     "price",
     "access-url",
     "allow-duplicate",
+    "feature",
+    "metadata",
   ],
   "products update": [...common, "yes", "name", "price", "access-url"],
   link: common,
-  "test-purchase": [...common, "product", "site-origin"],
+  "test-purchase": [...common, "product", "site-origin", "refund"],
   switch: ["json", "help"],
 };
 
@@ -113,7 +116,10 @@ const help = `Cozeni CLI ${version}
   products list             商品一覧
   products get <商品ID>     商品1件と購入リンクの状態を表示（リンクは発行しない）
   products create --name <名前> --price <円> --access-url <URL>
+  products create --name <名前> --price <円> --feature [--metadata key=value …]
                             商品を作成し、購入リンクを返す（確認が必要）。
+                            --feature は機能フラグの商品（--metadata は設定値で、
+                            true/false・数値・文字列。種類は作成後に変えられない）。
                             同じ内容の商品があれば作らずにそれを返す
                             （それでも作るなら --allow-duplicate）
   products update <商品ID> [--name] [--price] [--access-url]
@@ -123,6 +129,11 @@ const help = `Cozeni CLI ${version}
                             サンドボックスでテスト購入し、限定ページに入れる
                             ことを確かめて返金する（本番では使えない。
                             --site-origin は localhost・127.0.0.1・[::1] のみ）
+  test-purchase --product <商品ID>
+                            機能フラグの商品のテスト購入。付与を確かめ、返金は
+                            しない（--site-origin は不要）
+  test-purchase --product <商品ID> --refund
+                            機能フラグのテスト購入を返金する
   switch                    本番にログイン済みで期待するアカウントと一致して
                             いれば、既定の接続先を本番に切り替える
 
@@ -175,8 +186,11 @@ type Flags = {
   name?: string;
   price?: string;
   "access-url"?: string;
+  feature?: boolean;
+  metadata?: string[];
   product?: string;
   "site-origin"?: string;
+  refund?: boolean;
   help?: boolean;
   version?: boolean;
 };
@@ -199,8 +213,11 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         name: { type: "string" },
         price: { type: "string" },
         "access-url": { type: "string" },
+        feature: { type: "boolean" },
+        metadata: { type: "string", multiple: true },
         product: { type: "string" },
         "site-origin": { type: "string" },
+        refund: { type: "boolean" },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean", short: "v" },
       },
@@ -366,19 +383,25 @@ export async function run(context: CliContext): Promise<number> {
       // 本番の拒否は、通信する verifyCreator より先に行う。
       assertNotProductionApi(current);
       await verifyCreator(current, context.now());
+      const testContext = {
+        now: context.now,
+        confirm: async () => {},
+        fetch: context.fetch,
+        sleep: context.sleep,
+      };
       write(
         context,
         json,
-        await testPurchase(
-          current,
-          {
-            now: context.now,
-            confirm: async () => {},
-            fetch: context.fetch,
-            sleep: context.sleep,
-          },
-          { ...target, flow: config.flow },
-        ),
+        target.refund
+          ? await refundTestPurchase(current, testContext, {
+              productId: target.productId,
+              store,
+            })
+          : await testPurchase(current, testContext, {
+              ...target,
+              flow: config.flow,
+              store,
+            }),
       );
       return 0;
     }
@@ -431,7 +454,7 @@ export async function run(context: CliContext): Promise<number> {
       name === "whoami"
         ? await whoami(current, commandContext)
         : name === "status"
-          ? await status(current, commandContext)
+          ? await status(current, commandContext, store)
           : name === "products list"
             ? await listProducts(current, commandContext)
             : name === "products get"
@@ -495,7 +518,7 @@ async function switchAfterLogin(
     ...result,
     default_profile: "production",
     switched_to_production: true,
-    next_step: SWITCHED_NEXT_STEP,
+    next_step: await switchedNextStep(store),
   });
 }
 

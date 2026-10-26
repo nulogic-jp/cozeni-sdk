@@ -383,14 +383,14 @@ async function cachedHasFeatureFlag(
 
 ### 購入直後は照会し直す
 
-権利は決済の完了後に作られるため、購入完了ページへ戻った直後は数秒だけ照会に出ないことがあります。見つからなければ、数秒おきに数回だけ照会し直します（キャッシュは使いません）。
+権利は決済の完了後に作られるため、購入完了ページへ戻った直後は数秒だけ照会に出ないことがあります。見つからなければ、2秒おきに最大3回だけ照会し直します（キャッシュは使いません）。
 
 ```ts
 async function waitForFeatureFlag(email: string, productId: string) {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const result = await hasFeatureFlag({email, productId});
     if (result.granted) return result;
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   return {granted: false, metadata: {}}; // まだ反映されていない。あとで案内する
 }

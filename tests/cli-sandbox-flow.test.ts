@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type CliContext, run } from "../src/cli/run.js";
 import { createStore } from "../src/cli/store.js";
+import { fixture } from "./fixtures/external-api-v1.literal.js";
 
 const PROD_API = "https://api.cozeni.net";
 const PROD_APP = "https://cozeni.net";
@@ -558,6 +559,8 @@ describe("test-purchase", () => {
 
   function api(overrides: {
     accessUrl?: string;
+    // 商品の応答を上書きする（機能フラグ・ファイルの商品）。
+    product?: Record<string, unknown>;
     start?: (call: Call) => Response;
     refund?: () => Response;
     site?: Handler;
@@ -571,6 +574,7 @@ describe("test-purchase", () => {
         return json({
           ...product,
           ...(overrides.accessUrl ? { access_url: overrides.accessUrl } : {}),
+          ...overrides.product,
         });
       if (call.url === start)
         return (
@@ -764,13 +768,16 @@ describe("test-purchase", () => {
       expect(code).toBe(0);
     },
   );
-  it("--product と --site-origin は必須", async () => {
-    const t = cli(() => json({}, 500));
+  it("--product は必須で、限定ページの商品は --site-origin も必須", async () => {
+    const t = cli(api({}));
     expect((await t.run("test-purchase", "--json")).code).toBe(2);
+    expect(t.fetch).not.toHaveBeenCalled();
+    // --site-origin は商品の種類で要否が決まるので、限定ページの商品だと商品を読んでから止まる。
     expect(
       (await t.run("test-purchase", "--product", PRODUCT_ID, "--json")).code,
     ).toBe(2);
-    expect(t.fetch).not.toHaveBeenCalled();
+    expect(t.parsed().error.code).toBe("invalid_input");
+    expect(t.calls.some((call) => call.url === start)).toBe(false);
   });
   it("未購入でも限定ページが開いてしまうなら、入場画面へ送られていないと報告し、返金しない", async () => {
     const t = cli(api({ site: site({ open: true }) }));
@@ -969,6 +976,131 @@ describe("test-purchase", () => {
     );
     expect((await t.run(...args)).code).toBe(0);
     expect(t.parsed().data).toMatchObject({ refunded: false, refund_count: 0 });
+  });
+
+  describe("機能フラグの商品", () => {
+    const featureMetadata = { daily_messages: 100, plan: "pro" };
+    const feature = {
+      product: {
+        access_type: "feature",
+        access_url: null,
+        metadata: featureMetadata,
+      },
+    };
+    const featureArgs = ["test-purchase", "--product", PRODUCT_ID, "--json"];
+    const featureStart = () => json(fixture.test_purchase_completed_feature);
+    const markName = `test-purchase-sandbox-${PRODUCT_ID}`;
+    const apiCalls = (t: ReturnType<typeof cli>) =>
+      t.calls.filter((call) => call.url.startsWith(SBX_API));
+
+    it("--site-origin なしで購入し、付与と設定値を返し、返金せず印を残す", async () => {
+      const t = cli(api({ ...feature, start: featureStart }));
+      expect((await t.run(...featureArgs)).code).toBe(0);
+      const data = t.parsed().data;
+      expect(data).toMatchObject({
+        profile: "sandbox",
+        product_id: PRODUCT_ID,
+        access_type: "feature",
+        granted: true,
+        metadata: featureMetadata,
+        refunded: false,
+      });
+      expect(data.next_step).toContain("daily_messages=100, plan=pro");
+      expect(data.next_step).toContain(
+        `npx cozeni test-purchase --product ${PRODUCT_ID} --refund --json`,
+      );
+      // sandbox-first では、返金のあとに本番への許可の問いが続く。
+      expect(data.next_step).toContain("本番を導入してよいですか？");
+      expect(t.calls.some((call) => call.url === refund)).toBe(false);
+      expect(t.calls.some((call) => call.url.startsWith(SITE))).toBe(false);
+      expect(await store().loadPending(markName)).toMatchObject({
+        version: 1,
+        product_id: PRODUCT_ID,
+        created_at: expect.any(String),
+      });
+    });
+    it("completed に access_type が無い（古いサーバー）なら invalid_response で、印を残さない", async () => {
+      const t = cli(
+        api({
+          ...feature,
+          start: () =>
+            json({ status: "completed", handoff_code: null, expires_in: 60 }),
+        }),
+      );
+      expect((await t.run(...featureArgs)).code).not.toBe(0);
+      expect(t.parsed().error.code).toBe("invalid_response");
+      expect(await store().loadPending(markName)).toBeUndefined();
+    });
+    it("--profile sandbox で購入したとき（既定ではないとき）、返金の案内に --profile sandbox が付く", async () => {
+      await store().saveConfig({
+        version: 1,
+        default_profile: "production",
+        flow: "sandbox-first",
+        profiles: { production: { expected_creator_id: "cre_1" }, sandbox: {} },
+      });
+      const t = cli(api({ ...feature, start: featureStart }));
+      expect((await t.run(...featureArgs, "--profile", "sandbox")).code).toBe(
+        0,
+      );
+      expect(t.parsed().data.next_step).toContain(
+        `npx cozeni test-purchase --product ${PRODUCT_ID} --refund --profile sandbox --json`,
+      );
+    });
+    it("--refund は返金だけを呼び、印を消す。nothing_to_refund でも成功", async () => {
+      for (const reply of [
+        { status: "refunded", refund_count: 1 },
+        { status: "nothing_to_refund", refund_count: 0 },
+      ]) {
+        await store().savePending(markName, {
+          version: 1,
+          product_id: PRODUCT_ID,
+          created_at: "2026-10-06T00:00:00.000Z",
+        });
+        const t = cli(api({ ...feature, refund: () => json(reply) }));
+        expect((await t.run(...featureArgs, "--refund")).code).toBe(0);
+        expect(t.parsed().data).toEqual({
+          profile: "sandbox",
+          product_id: PRODUCT_ID,
+          refunded: reply.status === "refunded",
+          refund_count: reply.refund_count,
+        });
+        expect(
+          apiCalls(t).filter((call) => call.method === "POST"),
+        ).toHaveLength(1);
+        expect(apiCalls(t).some((call) => call.url === start)).toBe(false);
+        expect(await store().loadPending(markName)).toBeUndefined();
+      }
+    });
+    it("--refund も本番の API には送らない", async () => {
+      await saveCredential("production");
+      const t = cli(() => json({}, 500));
+      const { code } = await t.run(
+        ...featureArgs,
+        "--refund",
+        "--profile",
+        "production",
+      );
+      expect(code).toBe(2);
+      expect(t.parsed().error.code).toBe("test_purchase_unavailable");
+      expect(t.fetch).not.toHaveBeenCalled();
+    });
+    it("ファイルの商品は API を呼ばずに invalid_input", async () => {
+      const t = cli(
+        api({ product: { access_type: "file", access_url: null } }),
+      );
+      expect((await t.run(...featureArgs)).code).toBe(2);
+      expect(t.parsed().error).toMatchObject({
+        code: "invalid_input",
+        message: "ファイルの商品は test-purchase で確かめられません。",
+      });
+      expect(t.calls.some((call) => call.url === start)).toBe(false);
+    });
+    it("限定ページの商品で --site-origin が無ければ invalid_input", async () => {
+      const t = cli(api({}));
+      expect((await t.run(...featureArgs)).code).toBe(2);
+      expect(t.parsed().error.code).toBe("invalid_input");
+      expect(t.calls.some((call) => call.url === start)).toBe(false);
+    });
   });
 
   describe("外部レビューの指摘", () => {
@@ -1234,6 +1366,85 @@ describe("test-purchase", () => {
   });
 });
 
+describe("返金していないテスト購入（機能フラグ）", () => {
+  const mark = `test-purchase-sandbox-${PRODUCT_ID}`;
+  const leave = () =>
+    store().savePending(mark, {
+      version: 1,
+      product_id: PRODUCT_ID,
+      created_at: "2026-10-06T00:00:00.000Z",
+    });
+  const statusHandler: Handler = ({ url }) =>
+    url.endsWith("/account")
+      ? json(account("sandbox"))
+      : json({ items: [], next_cursor: null });
+  const refundCommand = `npx cozeni test-purchase --product ${PRODUCT_ID} --refund`;
+
+  beforeEach(async () => {
+    await sandboxFirst();
+    await saveCredential("sandbox");
+  });
+
+  it("返金していない機能フラグのテスト購入があれば status の warnings と商品IDに出る", async () => {
+    await leave();
+    const t = cli(statusHandler);
+    expect((await t.run("status")).out).toContain(
+      `返金していないテスト購入があります: ${PRODUCT_ID}。${refundCommand} --json で返金してください。`,
+    );
+    expect((await t.run("status", "--json")).code).toBe(0);
+    const data = t.parsed().data;
+    expect(data.warnings).toContain("test_purchase_not_refunded");
+    expect(data.unrefunded_test_purchases).toEqual([PRODUCT_ID]);
+  });
+  it("--refund の後は warnings から消える", async () => {
+    await leave();
+    const t = cli((call) =>
+      call.url.endsWith("/test-purchase/refund")
+        ? json({ status: "refunded", refund_count: 1 })
+        : statusHandler(call),
+    );
+    expect(
+      (await t.run("test-purchase", "--product", PRODUCT_ID, "--refund")).code,
+    ).toBe(0);
+    await t.run("status", "--json");
+    const data = t.parsed().data;
+    expect(data.warnings).not.toContain("test_purchase_not_refunded");
+    expect(data.unrefunded_test_purchases).toEqual([]);
+  });
+  it("別のプロファイルの印は status に出さない", async () => {
+    await store().savePending(`test-purchase-sandbox-2-${PRODUCT_ID}`, {
+      version: 1,
+      product_id: PRODUCT_ID,
+      created_at: "2026-10-06T00:00:00.000Z",
+    });
+    const t = cli(statusHandler);
+    await t.run("status", "--json");
+    expect(t.parsed().data.unrefunded_test_purchases).toEqual([]);
+  });
+  it("サンドボックスに印が残ったまま本番へ切り替えると、next_step の先頭が返金のコマンド", async () => {
+    await leave();
+    await saveCredential("production");
+    const t = cli(() => json(account("production")));
+    expect((await t.run("switch", "--json")).code).toBe(0);
+    const step: string = t.parsed().data.next_step;
+    expect(
+      step.startsWith(
+        `先に、サンドボックスのテスト購入を返金します: \`${refundCommand} --profile sandbox --json\``,
+      ),
+    ).toBe(true);
+    expect(step).toContain("--feature");
+  });
+  it("印が無ければ切り替えの案内は返金から始まらず、機能フラグの場合の案内を含む", async () => {
+    await saveCredential("production");
+    const t = cli(() => json(account("production")));
+    await t.run("switch", "--json");
+    const step: string = t.parsed().data.next_step;
+    expect(step).not.toContain("先に、サンドボックスのテスト購入を返金します");
+    expect(step).toContain("--feature");
+    expect(step).toContain("--metadata");
+  });
+});
+
 describe("skill の版", () => {
   it("同梱のskillの対応版にこの版が含まれ、test-purchase と switch を案内している", async () => {
     const skill = await readFile(
@@ -1249,6 +1460,46 @@ describe("skill の版", () => {
     expect(satisfies(version, skillRange(skill) ?? "")).toBe(true);
     expect(skill).toContain("test-purchase");
     expect(skill).toContain("switch");
+  });
+  it("skill は機能フラグの前にログインとメールアドレスの本人確認を確かめ、無ければ購入者限定ページで進める", async () => {
+    const skill = await readFile(
+      new URL("../skills/cozeni-setup/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    expect(skill).toContain("ログインのメールアドレスの本人確認");
+    expect(skill).toContain("購入者限定ページで進める");
+    expect(skill).toContain("--feature --metadata");
+    expect(skill).toContain("test_purchase_not_refunded");
+    expect(skill).toContain("--refund");
+    expect(skill).toContain("grep -c '^COZENI_API_KEY=' .env.local");
+    expect(skill).toContain("sandbox_recipient_not_allowed");
+    expect(skill).toContain("NEXT_PUBLIC_");
+    expect(skill).not.toContain(
+      "サイトのコード・`.env`・本番の環境変数にキーを書かない。本番のサイトはキーを使わない。",
+    );
+  });
+  it("nextjs.md と javascript-server.md の機能フラグは、画面とAPIの両方で hasFeatureFlag を呼び、NEXT_PUBLIC_ にしないと書く", async () => {
+    const nextjs = await readFile(
+      new URL("../skills/cozeni-setup/references/nextjs.md", import.meta.url),
+      "utf8",
+    );
+    const section = nextjs.slice(nextjs.indexOf("## 7. 機能フラグ"));
+    expect(section).toContain("createCheckout");
+    expect(section).toContain("hasFeatureFlag");
+    expect(section).toContain("画面と機能の API の両方");
+    expect(section).toContain("NEXT_PUBLIC_");
+    expect(section).toContain("COZENI_ENVIRONMENT=sandbox");
+    expect(section).toContain("403");
+    expect(section).toContain("利用者本人");
+    const server = await readFile(
+      new URL(
+        "../skills/cozeni-setup/references/javascript-server.md",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(server).toContain("## 機能フラグ");
+    expect(server).toContain("hasFeatureFlag");
   });
   it("売上の受け取り先のテスト登録は、画面ごとのテスト用の操作と導入プロンプトの値で案内する（V-29）", async () => {
     const skill = await readFile(

@@ -20,3 +20,11 @@ Node.jsサーバー、SSR、serverless function、edge function、Workerのよ�
 ExpressやFastify等で独自Requestを使う場合は、必要なmethod・URL・Cookie headerだけをWeb標準 `Request` へ変換する。Hono、Nuxt、SvelteKit、Astro SSR、React Router、Cloudflare Workers等でWeb標準APIを扱える場合は、既存のrouteやloaderへ同じ境界を組み込む。フレームワーク固有の認証、CSRF、middleware、error handlingは維持する。
 
 各保護入口には、未認証（`no_session`）・権利なし（`no_grant`）・権利の取り消し（`revoked`）・一時障害（`unavailable`）の拒否分岐を対応付ける。`unavailable` を再入場の要求に変えない。例のunit testだけで、対象アプリの入口が保護されたとは判断しない。
+
+## 機能フラグ
+
+アプリの機能を購入者だけに開くときは、サーバーで `createManagementClient({ apiKey: process.env.COZENI_API_KEY, environment })`（サンドボックスのキーは `COZENI_ENVIRONMENT=sandbox` と組）の `createCheckout({ productId, email })` と `hasFeatureFlag({ email, productId })` を使う（Next.js は [nextjs.md](nextjs.md) の「7. 機能フラグ」）。
+
+- キーは利用者が発行（権限は「購入画面を作る」「購入者の機能フラグを確かめる」）してサーバーの環境変数だけに入れる。ブラウザに渡さず、値を読まない・書かない。ログインとメールアドレスの本人確認が無いサイトでは使わない。
+- 機能の画面と機能の API の両方で `hasFeatureFlag` を呼び、`granted` が false なら API は 403 を返す。設定値（`metadata`）と上限はサーバーで扱う。
+- 購入直後は2秒おきに最大3回照会し直す。キャッシュはサーバーのメモリに、付与済み（`granted: true`）の結果だけを最大60秒。未購入の結果と購入直後の再照会はキャッシュしない（README の「結果のキャッシュ」節）。

@@ -276,6 +276,15 @@ export const fixture = {
     handoff_code:
       "fixture-only-not-a-valid-handoff-code-0000000000000000000000000000",
     expires_in: 60,
+    access_type: "page",
+    metadata: {},
+  },
+  test_purchase_completed_feature: {
+    status: "completed",
+    handoff_code: null,
+    expires_in: 60,
+    access_type: "feature",
+    metadata: { daily_messages: 100, plan: "pro" },
   },
   test_purchase_pending: {
     status: "pending",
