@@ -309,12 +309,25 @@ const {granted, metadata} = await hasFeatureFlag({
 設定値は上限などに使い、使った量はアプリのサーバーで数えます。
 
 ```ts
+import {CozeniError, hasFeatureFlag} from '@nulogic/cozeni-sdk/next';
+
 export async function POST(request: Request) {
   const user = await requireLoginUser(request); // 本人確認済みのメールアドレス
-  const {granted, metadata} = await hasFeatureFlag({
-    email: user.email,
-    productId: process.env.COZENI_PRO_PRODUCT_ID!,
-  });
+  let flag: Awaited<ReturnType<typeof hasFeatureFlag>> = {
+    granted: false,
+    metadata: {},
+  };
+  try {
+    flag = await hasFeatureFlag({
+      email: user.email,
+      productId: process.env.COZENI_PRO_PRODUCT_ID!,
+    });
+  } catch (error) {
+    // 照会の上限（rate_limited）は、機能を使わせない側（無料枠）に倒す。ほかの失敗は握りつぶさない
+    if (!(error instanceof CozeniError && error.code === 'rate_limited'))
+      throw error;
+  }
+  const {granted, metadata} = flag;
   const limit =
     granted && typeof metadata.daily_messages === 'number'
       ? metadata.daily_messages
@@ -331,22 +344,40 @@ export async function POST(request: Request) {
 
 ```ts
 type Flag = Awaited<ReturnType<typeof hasFeatureFlag>>;
+const MAX_ENTRIES = 1000;
+// 期限はすべて同じ60秒なので、Mapの挿入順が期限の順になる。
 const cache = new Map<string, {expires: number; value: Flag}>();
+
+function remember(key: string, value: Flag) {
+  const now = Date.now();
+  cache.delete(key); // 入れ直して、末尾（いちばん新しい）に置く
+  for (const [oldKey, entry] of cache) {
+    if (entry.expires > now) break; // 先頭から、期限切れだけを消す
+    cache.delete(oldKey);
+  }
+  while (cache.size >= MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest); // 最大件数を超えたら古いものから消す
+  }
+  cache.set(key, {expires: now + 60_000, value});
+}
+
 async function cachedHasFeatureFlag(
   email: string,
   productId: string,
 ): Promise<Flag> {
   const key = `${productId}:${email.trim().toLowerCase()}`;
   const hit = cache.get(key);
-  if (hit) {
-    if (hit.expires > Date.now()) return hit.value;
-    cache.delete(key); // 期限切れは取得時に消す
-  }
+  if (hit && hit.expires > Date.now()) return hit.value;
   const value = await hasFeatureFlag({email, productId}); // 失敗は投げるので残らない
-  if (value.granted) cache.set(key, {expires: Date.now() + 60_000, value});
+  if (value.granted) remember(key, value);
+  else cache.delete(key); // 期限切れの古い付与済みの結果を残さない
   return value;
 }
 ```
+
+未購入の結果はキャッシュしないので、未購入のユーザーの照会は毎回APIに届きます。照会はキーごとに600回/分が上限で、超えると `rate_limited`（`retryAfterSeconds` を見る）になります。そのときは機能を使わせない側に倒します（上の上限の例なら、`CozeniError` の `code === 'rate_limited'` を `catch` して、無料枠の上限で判定します）。
 
 キャッシュはサーバーのメモリだけに置き、メールアドレスをログや外部のストア・分析に出さないでください。
 
