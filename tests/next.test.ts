@@ -613,6 +613,19 @@ describe("機能フラグの3関数（COZENI_API_KEYを環境変数から読む�
       metadata: {},
     });
   });
+  it.each<[string | undefined, string]>([
+    ["", "空"],
+    [undefined, "未指定"],
+  ])(
+    "hasFeatureFlagはproductIdが%j（%s）なら通信せずinvalid_inputを投げる",
+    async (productId) => {
+      api(() => json(state));
+      await expect(
+        hasFeatureFlag({ email: EMAIL, productId: productId as string }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
   it("createCheckoutは購入画面を作り、camelCaseで返す", async () => {
     vi.stubEnv("COZENI_ENVIRONMENT", "sandbox");
     const url = "https://checkout-sandbox.cozeni.net/checkout/a?checkout=chk_1";

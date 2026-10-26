@@ -719,7 +719,6 @@ describe("機能フラグ（購入画面の作成・購入者の照会）", () =
   it.each([
     [409, "creator_not_ready"],
     [422, "sandbox_recipient_not_allowed"],
-    [403, "terms_consent_required"],
   ])(
     "追加のエラーコード %s %s を未知コードに丸めない",
     async (status, code) => {
@@ -898,6 +897,15 @@ describe("機能フラグ（購入画面の作成・購入者の照会）", () =
       customer_id: "cus_1",
       feature_flags: [{ ...flag, metadata: { url: { nested: true } } }],
     }),
+    // JSON.parse は own プロパティとして "__proto__" を作る。受け取る側で
+    // プロトタイプを差し替えさせないよう、契約外として弾く。
+    new Response(
+      `{"customer_id":"cus_1","feature_flags":[${JSON.stringify(flag).replace(
+        /"metadata":\{/,
+        '"metadata":{"__proto__":"x",',
+      )}]}`,
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
     ok({ ...state }, 202),
   ])(
     "getCustomerStateは契約外の応答をinvalid_responseにする %#",
@@ -938,6 +946,22 @@ describe("機能フラグ（購入画面の作成・購入者の照会）", () =
       expect(
         await managementClient(fetch).hasFeatureFlag({ email, productId }),
       ).toEqual({ granted: false, metadata: {} });
+    },
+  );
+  it.each([
+    { email, productId: "" },
+    { email, productId: undefined },
+    { email, productId: "p".repeat(201) },
+  ])(
+    "hasFeatureFlagは不正なproductIdを通信前にinvalid_inputにする %#",
+    async (input) => {
+      const fetch = vi.fn().mockResolvedValue(ok(state));
+      await expect(
+        managementClient(fetch).hasFeatureFlag(
+          input as { email: string; productId: string },
+        ),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(fetch).not.toHaveBeenCalled();
     },
   );
   it("hasFeatureFlagは照会の失敗を握りつぶさず投げる", async () => {

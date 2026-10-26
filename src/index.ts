@@ -285,6 +285,9 @@ function emailInput(email: string): string {
 }
 function metadataValue(value: unknown): FeatureFlagMetadata | undefined {
   if (!record(value)) return;
+  // JSON.parse は "__proto__" を own プロパティとして作る。受け取った側の
+  // コードがプロトタイプを書き換えてしまわないよう、契約外として扱う。
+  if (Object.hasOwn(value, "__proto__")) return;
   for (const item of Object.values(value))
     if (
       typeof item !== "string" &&
@@ -449,7 +452,14 @@ export function createManagementClient(options: ManagementClientOptions) {
       email: string;
       productId: string;
     }): Promise<{ granted: boolean; metadata: FeatureFlagMetadata }> {
-      const state = await getCustomerState({ email: input?.email });
+      // createCheckout と同じ検査。不正な商品IDは通信の前に止める。
+      if (
+        typeof input?.productId !== "string" ||
+        !input.productId ||
+        input.productId.length > 200
+      )
+        throw new CozeniError("invalid_input");
+      const state = await getCustomerState({ email: input.email });
       const flag = state.featureFlags.find(
         (item) => item.productId === input.productId,
       );
