@@ -65,7 +65,8 @@ interface Schema {
   properties?: Record<string, Schema>;
   items?: Schema;
   nullable?: boolean;
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | Schema;
+  allOf?: Schema[];
   minimum?: number;
   maximum?: number;
   minLength?: number;
@@ -121,6 +122,8 @@ function matches(schema: Schema, value: unknown): boolean {
     return matches(target, value);
   }
   if (value === null && schema.nullable) return true;
+  if (schema.allOf && !schema.allOf.every((part) => matches(part, value)))
+    return false;
   if (schema.oneOf)
     return (
       schema.oneOf.filter((candidate) => matches(candidate, value)).length === 1
@@ -134,6 +137,16 @@ function matches(schema: Schema, value: unknown): boolean {
     if (
       schema.additionalProperties === false &&
       Object.keys(object).some((key) => !schema.properties?.[key])
+    )
+      return false;
+    // スキーマ形式のadditionalPropertiesは、properties以外のキーの値に適用する。
+    const extra = schema.additionalProperties;
+    if (
+      extra &&
+      typeof extra === "object" &&
+      Object.entries(object).some(
+        ([key, item]) => !schema.properties?.[key] && !matches(extra, item),
+      )
     )
       return false;
     return Object.entries(schema.properties ?? {}).every(
@@ -687,6 +700,22 @@ describe("機能フラグの外部契約とSDK", () => {
     // @ts-expect-error access_type は作成後に変えられない
     const typeChange: UpdateProduct = { access_type: "feature" };
     expect([body, typeChange]).toHaveLength(2);
+  });
+  it("設定値の契約は値の型を縛り、null・空文字・入れ子を拒否する", () => {
+    const metadata: Schema = {
+      $ref: "#/components/schemas/ExternalFeatureFlagMetadata",
+    };
+    const updateMetadata =
+      specification.components.schemas.ExternalUpdateProduct?.properties
+        ?.metadata;
+    expect(updateMetadata?.allOf).toBeDefined();
+    for (const schema of [metadata, updateMetadata as Schema]) {
+      expect(matches(schema, { plan: "pro", n: 100, beta: true })).toBe(true);
+      expect(matches(schema, {})).toBe(true);
+      expect(matches(schema, { a: null })).toBe(false);
+      expect(matches(schema, { a: "" })).toBe(false);
+      expect(matches(schema, { a: { nested: true } })).toBe(false);
+    }
   });
   it("スコープに customers:read・checkouts:write がある", () => {
     const scopes = [
