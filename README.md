@@ -251,13 +251,13 @@ import {createManagementClient, type Environment} from '@nulogic/cozeni-sdk';
 const cozeni = createManagementClient({
   apiKey: process.env.COZENI_API_KEY!,
   // 'production'・'sandbox'、未指定（本番）。それ以外の値は渡さない
-  environment: (process.env.COZENI_ENVIRONMENT || undefined) as
+  environment: (process.env.COZENI_ENVIRONMENT?.trim() || undefined) as
     | Environment
     | undefined,
 });
 ```
 
-`COZENI_API_KEY!` は型の指定だけで、未設定の確認はしません。未設定のまま呼ぶと、`/next` の3関数と違って理由のログは出ずに `CozeniError`（`code: 'invalid_input'`）になります。CLIも同じ環境変数名 `COZENI_API_KEY` を読む（保存したキーより優先）ので、アプリ用のキーを入れたシェルでCLIを使うと、CLIがそのキーを使います。アプリ用のキーを、CLIを動かすシェルへ書き出さないでください。
+`COZENI_API_KEY!` は型の指定だけで、未設定の確認はしません。未設定のままでは、`/next` の3関数と違って理由のログは出ず、クライアントを作る時点（モジュールの読み込み時）に `CozeniError`（`code: 'invalid_input'`）を投げます。CLIも同じ環境変数名 `COZENI_API_KEY` を読む（保存したキーより優先）ので、アプリ用のキーを入れたシェルでCLIを使うと、CLIがそのキーを使います。アプリ用のキーを、CLIを動かすシェルへ書き出さないでください。
 
 ### 前提（必ず読む）
 
@@ -282,7 +282,7 @@ const checkout = await createCheckout({
 redirect(checkout.url); // checkout.expiresAt（作成から30分）を過ぎたら作り直す
 ```
 
-URLは購入者本人にだけ渡します。すでに購入済みで購入制限に達していると `CozeniError`（`code: 'already_purchased'`、`status: 409`）になるので、「購入済み」として扱います。ほかに `creator_not_ready`（販売の準備が未完了）・`product_archived` / `checkout_link_disabled`（販売できない商品）があります。
+URLは購入者本人にだけ渡します。すでに購入済みで購入制限に達していると `CozeniError`（`code: 'already_purchased'`、`status: 409`）になるので、「購入済み」として扱います。ほかに `product_not_found`（`status: 404`。存在しない、ほかの販売者の、または別の環境の商品ID）・`creator_not_ready`（販売の準備が未完了）・`product_archived` / `checkout_link_disabled`（販売できない商品）があります。
 
 **サンドボックスの購入画面は、販売者本人のメールアドレスにだけ作れます。** ほかのメールアドレスでは `CozeniError`（`code: 'sandbox_recipient_not_allowed'`、`status: 422`）になります。試すときは、販売者本人のメールアドレスのアカウントでログインします。
 
@@ -327,18 +327,23 @@ export async function POST(request: Request) {
 
 ### 結果のキャッシュ（60秒まで）
 
-同じ購入者の結果は、最大60秒キャッシュしてかまいません。照会はリクエストごとに行いうるので、サーバーのメモリなどで短く持ちます。剥奪は次の照会から反映されます。
+同じ購入者の結果は、最大60秒キャッシュしてかまいません。照会はリクエストごとに行いうるので、サーバーのメモリなどで短く持ちます。**キャッシュするのは付与済み（`granted: true`）の結果だけです。** 未購入の結果を残すと、購入した直後の最大60秒、購入済みなのに未購入と判定されます。剥奪の反映は、キャッシュの期限の60秒以内です。
 
 ```ts
-type Flag = ReturnType<typeof hasFeatureFlag>;
+type Flag = Awaited<ReturnType<typeof hasFeatureFlag>>;
 const cache = new Map<string, {expires: number; value: Flag}>();
-function cachedHasFeatureFlag(email: string, productId: string): Flag {
+async function cachedHasFeatureFlag(
+  email: string,
+  productId: string,
+): Promise<Flag> {
   const key = `${productId}:${email.trim().toLowerCase()}`;
   const hit = cache.get(key);
-  if (hit && hit.expires > Date.now()) return hit.value;
-  const value = hasFeatureFlag({email, productId});
-  cache.set(key, {expires: Date.now() + 60_000, value});
-  value.catch(() => cache.delete(key)); // 失敗は残さない
+  if (hit) {
+    if (hit.expires > Date.now()) return hit.value;
+    cache.delete(key); // 期限切れは取得時に消す
+  }
+  const value = await hasFeatureFlag({email, productId}); // 失敗は投げるので残らない
+  if (value.granted) cache.set(key, {expires: Date.now() + 60_000, value});
   return value;
 }
 ```
@@ -502,7 +507,7 @@ export function GET() {
 | `createCheckout({productId, email})` / `getCustomerState({email})` / `hasFeatureFlag({email, productId})` | Route Handler・Server Action用。機能フラグの購入画面の作成と購入者の照会（上の「機能フラグ」）。キーは環境変数 `COZENI_API_KEY`、接続先は `COZENI_ENVIRONMENT` から決める。設定が不正なら `invalid_input`。`NEXT_PUBLIC_COZENI_API_KEY` があれば使わずに拒否する |
 | `portalRedirect(creatorId, options?)` | Route Handler用。購入者ポータルへのリンクを発行して302で送る。このサイトで入場していなければ、コード無しのその販売者のポータル（Cozeniが確認コードでの入場へ進める）へ302。発行できなければ503（応答が合わない、たとえば返ったURLの販売者やオリジンが違うときは、クリエイターIDと `COZENI_ENVIRONMENT` の確認を促す固定文をサーバーのログに出す）。`COZENI_API_ORIGIN` で独自の接続先を使うときは購入者面のオリジンが分からないので、入場していなければ401を返す |
 
-戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**購入者限定ページだけなら、本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** 機能フラグを使うサイトは、これに加えて `COZENI_API_KEY`（サーバーだけに置くAPIキー）が必要です（上の「機能フラグ」の「キーと環境変数」）。 APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
+戻り先のオリジンは `COZENI_SITE_ORIGIN` に固定し、`Host` ヘッダーを信用しません。**サイトは1つのオリジンで公開してください**（例：`www` の有無をリダイレクトで統一する）。`COZENI_SITE_ORIGIN` と違うホストでアクセスされた場合もコードの交換は行われますが、購入者のCookieはアクセスされたホストに付き、戻り先の `COZENI_SITE_ORIGIN` には届きません。単回のコードは消費されるため、購入者はメールアドレスでの再入場が必要になります。**購入者限定ページだけなら、本番で必要な環境変数は `COZENI_SITE_ORIGIN` だけです。** 機能フラグを使うサイトは、これに加えて `COZENI_API_KEY`（サーバーだけに置くAPIキー）が必要です（上の「機能フラグ」の「キーと環境変数」）。APIオリジンの既定値は `https://api.cozeni.net` です。サンドボックスにつなぐときは `COZENI_ENVIRONMENT=sandbox` を設定します（上の「サンドボックス」）。Cozeniを手元で動かす開発時だけ `COZENI_API_ORIGIN` で上書きします。商品IDと購入リンクは秘密ではないので、コードに直接書きます。
 
 **リダイレクトするのはpageの入口だけです。** `requireEntitlement()` はnext/navigationの `redirect()`（制御フロー例外）を投げることがあります。呼び出しは `AccessDenied` だけを捕捉し、それ以外はcatchで握りつぶさず上位へ伝播させてください。**Route Handler（JSON API）**は `entitlement()` の結果を `denialResponse()` へ渡し、401/403/503のJSONへ `enter_url` を含めます。**Server Action**はWeb Responseを返さず、`entitlement()` の結果の理由をplain objectとして返します。
 
