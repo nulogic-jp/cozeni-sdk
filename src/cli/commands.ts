@@ -160,9 +160,38 @@ const sandboxBlockerMessages: Partial<Record<SalesBlocker["code"], string>> = {
     "テスト用の売上の受け取り先の確認が終わるのを待ってください。",
 };
 
+/** 機能フラグのテスト購入のあと、返金が済むまで残す印（接頭辞 idem- ではないので期限切れの掃除で消えない）。 */
+export const testPurchaseMark = (profileName: string, productId: string) =>
+  `test-purchase-${profileName}-${productId}`.toLowerCase();
+
+/** 返金していない機能フラグのテスト購入の商品ID。プロファイル名が別のプロファイルの接頭辞でも混ざらないよう、印の名前を照合する。 */
+export async function unrefundedTestPurchases(
+  store: Store,
+  profileName: string,
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const name of await store.listPending(
+    testPurchaseMark(profileName, ""),
+  )) {
+    try {
+      const saved = await store.loadPending(name);
+      if (
+        record(saved) &&
+        typeof saved.product_id === "string" &&
+        name === testPurchaseMark(profileName, saved.product_id)
+      )
+        ids.push(saved.product_id);
+    } catch {
+      // 読めない印は数えない。1件の不備で status を止めない。
+    }
+  }
+  return ids.sort();
+}
+
 export async function status(
   session: Session,
   context: CommandContext,
+  store: Store,
 ): Promise<Output> {
   const account: Account = await call(session, context, () =>
     session.client.account.get(),
@@ -185,6 +214,8 @@ export async function status(
   const warnings: string[] = [];
   if (expiresAt && Date.parse(expiresAt) - context.now() < KEY_EXPIRING_MS)
     warnings.push("key_expiring");
+  const unrefunded = await unrefundedTestPurchases(store, session.profile.name);
+  if (unrefunded.length > 0) warnings.push("test_purchase_not_refunded");
   const messageForUser = userMessages(sales, nextActions, session.appOrigin);
   const human = [
     `接続先: ${session.apiOrigin}（${account.environment}）`,
@@ -199,6 +230,10 @@ export async function status(
   human.push(`商品: ${products.length}件`);
   for (const product of products) human.push(productLine(product));
   if (expiresAt) human.push(`ログインの有効期限: ${expiresAt}`);
+  if (unrefunded.length > 0)
+    human.push(
+      `返金していないテスト購入があります: ${unrefunded.join(", ")}。${CLI} test-purchase --product ${unrefunded[0]} --refund${profileSuffix(session.profile)} --json で返金してください。`,
+    );
   if (warnings.includes("key_expiring"))
     human.push(
       `注意: ログインの期限が近づいています。${CLI} login${profileSuffix(session.profile)} で更新してください。`,
@@ -220,6 +255,7 @@ export async function status(
       message_for_user: messageForUser,
       products,
       warnings,
+      unrefunded_test_purchases: unrefunded,
       next_step: statusNextStep(session, sandbox, nextActions, products),
     },
     human,

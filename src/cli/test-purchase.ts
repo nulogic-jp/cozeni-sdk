@@ -20,6 +20,7 @@ import {
   call,
   type Output,
   SANDBOX_STRIPE_REQUEST,
+  testPurchaseMark,
 } from "./commands.js";
 import { CliError } from "./errors.js";
 import { CLI } from "./invocation.js";
@@ -98,10 +99,6 @@ export function assertTestPurchaseAllowed(
     throw invalidSiteOrigin();
   return { productId, site, refund: flags.refund === true };
 }
-
-/** 機能フラグのテスト購入のあと、返金が済むまで残す印（接頭辞 idem- ではないので期限切れの掃除で消えない）。 */
-export const testPurchaseMark = (profileName: string, productId: string) =>
-  `test-purchase-${profileName}-${productId}`.toLowerCase();
 
 function notReady(data: unknown): CliError {
   const error = record(data) && record(data.error) ? data.error : {};

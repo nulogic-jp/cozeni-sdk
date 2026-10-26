@@ -1351,6 +1351,85 @@ describe("test-purchase", () => {
   });
 });
 
+describe("返金していないテスト購入（機能フラグ）", () => {
+  const mark = `test-purchase-sandbox-${PRODUCT_ID}`;
+  const leave = () =>
+    store().savePending(mark, {
+      version: 1,
+      product_id: PRODUCT_ID,
+      created_at: "2026-10-06T00:00:00.000Z",
+    });
+  const statusHandler: Handler = ({ url }) =>
+    url.endsWith("/account")
+      ? json(account("sandbox"))
+      : json({ items: [], next_cursor: null });
+  const refundCommand = `npx cozeni test-purchase --product ${PRODUCT_ID} --refund`;
+
+  beforeEach(async () => {
+    await sandboxFirst();
+    await saveCredential("sandbox");
+  });
+
+  it("返金していない機能フラグのテスト購入があれば status の warnings と商品IDに出る", async () => {
+    await leave();
+    const t = cli(statusHandler);
+    expect((await t.run("status")).out).toContain(
+      `返金していないテスト購入があります: ${PRODUCT_ID}。${refundCommand} --json で返金してください。`,
+    );
+    expect((await t.run("status", "--json")).code).toBe(0);
+    const data = t.parsed().data;
+    expect(data.warnings).toContain("test_purchase_not_refunded");
+    expect(data.unrefunded_test_purchases).toEqual([PRODUCT_ID]);
+  });
+  it("--refund の後は warnings から消える", async () => {
+    await leave();
+    const t = cli((call) =>
+      call.url.endsWith("/test-purchase/refund")
+        ? json({ status: "refunded", refund_count: 1 })
+        : statusHandler(call),
+    );
+    expect(
+      (await t.run("test-purchase", "--product", PRODUCT_ID, "--refund")).code,
+    ).toBe(0);
+    await t.run("status", "--json");
+    const data = t.parsed().data;
+    expect(data.warnings).not.toContain("test_purchase_not_refunded");
+    expect(data.unrefunded_test_purchases).toEqual([]);
+  });
+  it("別のプロファイルの印は status に出さない", async () => {
+    await store().savePending(`test-purchase-sandbox-2-${PRODUCT_ID}`, {
+      version: 1,
+      product_id: PRODUCT_ID,
+      created_at: "2026-10-06T00:00:00.000Z",
+    });
+    const t = cli(statusHandler);
+    await t.run("status", "--json");
+    expect(t.parsed().data.unrefunded_test_purchases).toEqual([]);
+  });
+  it("サンドボックスに印が残ったまま本番へ切り替えると、next_step の先頭が返金のコマンド", async () => {
+    await leave();
+    await saveCredential("production");
+    const t = cli(() => json(account("production")));
+    expect((await t.run("switch", "--json")).code).toBe(0);
+    const step: string = t.parsed().data.next_step;
+    expect(
+      step.startsWith(
+        `先に、サンドボックスのテスト購入を返金します: \`${refundCommand} --profile sandbox --json\``,
+      ),
+    ).toBe(true);
+    expect(step).toContain("--feature");
+  });
+  it("印が無ければ切り替えの案内は返金から始まらず、機能フラグの場合の案内を含む", async () => {
+    await saveCredential("production");
+    const t = cli(() => json(account("production")));
+    await t.run("switch", "--json");
+    const step: string = t.parsed().data.next_step;
+    expect(step).not.toContain("先に、サンドボックスのテスト購入を返金します");
+    expect(step).toContain("--feature");
+    expect(step).toContain("--metadata");
+  });
+});
+
 describe("skill の版", () => {
   it("同梱のskillの対応版にこの版が含まれ、test-purchase と switch を案内している", async () => {
     const skill = await readFile(

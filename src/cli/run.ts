@@ -39,8 +39,8 @@ import {
   FLOW_UNKNOWN_HINT,
   flowUnknown,
   SWITCH_ABORTED_NEXT_STEP,
-  SWITCHED_NEXT_STEP,
   setDefaultToProduction,
+  switchedNextStep,
   switchesToProduction,
   switchToProduction,
 } from "./switch.js";
@@ -454,7 +454,7 @@ export async function run(context: CliContext): Promise<number> {
       name === "whoami"
         ? await whoami(current, commandContext)
         : name === "status"
-          ? await status(current, commandContext)
+          ? await status(current, commandContext, store)
           : name === "products list"
             ? await listProducts(current, commandContext)
             : name === "products get"
@@ -518,7 +518,7 @@ async function switchAfterLogin(
     ...result,
     default_profile: "production",
     switched_to_production: true,
-    next_step: SWITCHED_NEXT_STEP,
+    next_step: await switchedNextStep(store),
   });
 }
 
