@@ -83,6 +83,14 @@ const code = await run({
     return () => reader.off("line", listener);
   },
   runCommand,
+  onInterrupt(cleanup) {
+    // Ctrl-C で止めたら、途中のアップロードを中止してから終わる。
+    const handler = () => {
+      void cleanup().finally(() => process.exit(130));
+    };
+    process.once("SIGINT", handler);
+    return () => process.off("SIGINT", handler);
+  },
 });
 lines?.close();
 process.exitCode = code;

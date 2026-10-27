@@ -674,7 +674,7 @@ describe("機能フラグの外部契約とSDK", () => {
     expectTypeOf<AccessType>().toEqualTypeOf<"page" | "feature" | "file">();
     expectTypeOf<Product["metadata"]>().toEqualTypeOf<FeatureFlagMetadata>();
   });
-  it("作成の型は page 形と feature 形だけを受け付ける", () => {
+  it("作成の型は page・feature・file の形を受け付け、混ぜ書きを止める", () => {
     const page = fixture.create_product satisfies CreateProduct;
     const feature = fixture.create_feature_product satisfies CreateProduct;
     // @ts-expect-error feature 形に access_url は書けない
@@ -684,13 +684,32 @@ describe("機能フラグの外部契約とSDK", () => {
     };
     // @ts-expect-error page 形に metadata は書けない
     const pageWithMetadata: CreateProduct = { ...page, metadata: { a: 1 } };
-    const file: CreateProduct = {
+    const file = {
       name: "資料",
       price_jpy: 100,
-      // @ts-expect-error file は作成の入力に使えない
+      access_type: "file",
+      file_ids: ["fil_1"],
+    } satisfies CreateProduct;
+    // @ts-expect-error file 形は file_ids が要る
+    const fileWithoutIds: CreateProduct = {
+      name: "資料",
+      price_jpy: 100,
       access_type: "file",
     };
-    expect([page, feature, mixed, pageWithMetadata, file]).toHaveLength(5);
+    // @ts-expect-error file 形に access_url は書けない
+    const fileWithUrl: CreateProduct = {
+      ...file,
+      access_url: "https://example.com",
+    };
+    expect([
+      page,
+      feature,
+      mixed,
+      pageWithMetadata,
+      file,
+      fileWithoutIds,
+      fileWithUrl,
+    ]).toHaveLength(7);
   });
   it("更新の型は access_type を送れず、metadata・description を受け付ける", () => {
     const body = {

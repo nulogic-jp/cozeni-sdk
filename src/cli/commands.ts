@@ -20,6 +20,12 @@ import {
   type Session,
 } from "./api.js";
 import { CliError } from "./errors.js";
+import {
+  fileSize,
+  MAX_FILES_PER_PRODUCT,
+  type UploadOptions,
+  uploadPaths,
+} from "./files.js";
 import type { Store } from "./store.js";
 
 export interface CommandContext {
@@ -122,7 +128,8 @@ const featureLabel = (metadata: FeatureFlagMetadata | undefined) =>
 
 function productKind(product: Product): string {
   if (product.access_type === "feature") return featureLabel(product.metadata);
-  if (product.access_type === "file") return "ファイル";
+  if (product.access_type === "file")
+    return product.files ? `ファイル（${product.files.length}件）` : "ファイル";
   return String(product.access_url);
 }
 
@@ -414,6 +421,10 @@ export async function getProduct(
     },
     human: [
       productLine(product),
+      ...(product.files ?? []).map(
+        (file) =>
+          `  - ${file.id} ${file.filename} ${fileSize(file.size_bytes)}${file.disabled ? "（配信停止中）" : ""}`,
+      ),
       result === null
         ? `購入リンク: 未発行（${CLI} link ${product.id} で発行できます）`
         : `購入リンク: ${result.url}${result.disabled ? "（無効）" : ""}`,
@@ -444,6 +455,10 @@ export interface ProductInput {
   "allow-duplicate"?: boolean;
   feature?: boolean;
   metadata?: string[];
+  /** 上げてから付ける手元のファイル。 */
+  file?: string[];
+  /** 上げ済みのファイルのID。 */
+  "file-id"?: string[];
 }
 // サーバーが受け付ける価格の範囲（円）。
 const MIN_PRICE = 50;
@@ -539,32 +554,43 @@ export async function createProduct(
   context: CommandContext,
   store: Store,
   input: ProductInput,
+  upload?: UploadOptions,
 ): Promise<Output> {
   if (input.name === undefined || input.price === undefined)
     throw new CliError(
       "invalid_input",
-      "--name・--price と、--access-url か --feature を指定してください。",
+      "--name・--price と、--access-url・--feature・--file（--file-id）のどれかを指定してください。",
     );
   const feature = input.feature === true;
-  if (feature === Boolean(input["access-url"]))
+  const paths = input.file ?? [];
+  const givenIds = input["file-id"] ?? [];
+  const file = paths.length > 0 || givenIds.length > 0;
+  if (
+    [feature, Boolean(input["access-url"]), file].filter(Boolean).length !== 1
+  )
     throw new CliError(
       "invalid_input",
-      "--access-url（購入後に見せるページ）か --feature（機能フラグ）のどちらかを指定してください。",
+      "--access-url（購入後に見せるページ）・--feature（機能フラグ）・--file / --file-id（ファイル）のどれか1つを指定してください。",
     );
   if (!feature && input.metadata !== undefined)
     throw new CliError(
       "invalid_input",
       "--metadata は --feature のときだけ指定できます。",
     );
+  if (file) {
+    if (paths.length + givenIds.length > MAX_FILES_PER_PRODUCT)
+      throw new CliError(
+        "invalid_input",
+        `1つの商品に付けられるファイルは${MAX_FILES_PER_PRODUCT}件までです。`,
+      );
+    if (new Set(givenIds).size !== givenIds.length)
+      throw new CliError("invalid_input", "--file-id が重複しています。");
+  }
   const name = parseName(input.name);
   const priceJpy = parsePrice(input.price);
   const metadata = feature ? parseMetadata(input.metadata ?? []) : {};
   const accessUrlInput = input["access-url"];
   const accessUrl = accessUrlInput ? parseAccessUrl(accessUrlInput) : undefined;
-  const product: CreateProduct =
-    accessUrl === undefined
-      ? { name, price_jpy: priceJpy, access_type: "feature", metadata }
-      : { name, price_jpy: priceJpy, access_url: accessUrl };
   // 機能フラグの案内（サンドボックスか）と冪等キーのために、接続先のアカウントを1度だけ取る。
   let account: Account | undefined;
   const getAccount = async () =>
@@ -573,19 +599,27 @@ export async function createProduct(
     ));
   // 導入のやり直しで同じ商品が増えないよう、作る前に同じ内容の有効な商品を探す。
   // 見つかれば作らず（確認も要らない）、それを返す。購入リンクは取得だけで、発行しない。
-  if (!input["allow-duplicate"]) {
+  // 手元のファイルを上げて作る場合は、上げるたびにIDが変わるので探さない。
+  if (!input["allow-duplicate"] && paths.length === 0) {
     const same = (await allProducts(session, context)).find(
       (item) =>
         item.status === "active" &&
-        item.name === product.name &&
-        item.price_jpy === product.price_jpy &&
-        (accessUrl === undefined
+        item.name === name &&
+        item.price_jpy === priceJpy &&
+        (feature
           ? item.access_type === "feature" &&
             sameMetadata(item.metadata ?? {}, metadata)
-          : // URLを持たない商品（feature・file）は限定ページの商品と同じにならない。
-            item.access_type !== "feature" &&
-            item.access_url !== null &&
-            sameUrl(item.access_url, accessUrl)),
+          : file
+            ? item.access_type === "file" &&
+              item.files !== undefined &&
+              item.files.map((entry) => entry.id).join(",") ===
+                givenIds.join(",")
+            : // URLを持たない商品（feature・file）は限定ページの商品と同じにならない。
+              item.access_type !== "feature" &&
+              item.access_type !== "file" &&
+              item.access_url !== null &&
+              accessUrl !== undefined &&
+              sameUrl(item.access_url, accessUrl)),
     );
     if (same) {
       const found = await existingLink(session, context, same.id);
@@ -620,19 +654,86 @@ export async function createProduct(
       };
     }
   }
+  const fileNames = [...givenIds, ...paths];
   await context.confirm(
-    accessUrl === undefined
-      ? `商品「${product.name}」を ${yen(product.price_jpy)} で作成します。種類: ${featureLabel(metadata)}。種類は作成後に変えられません。`
-      : `商品「${product.name}」を ${yen(product.price_jpy)} で作成します。購入後に表示するページ: ${accessUrl}`,
-    { action: "create", product },
+    feature
+      ? `商品「${name}」を ${yen(priceJpy)} で作成します。種類: ${featureLabel(metadata)}。種類は作成後に変えられません。`
+      : file
+        ? `商品「${name}」を ${yen(priceJpy)} で作成します。種類: ファイル（${fileNames.join("、")}）。購入した人がダウンロードできます。種類は作成後に変えられません。`
+        : `商品「${name}」を ${yen(priceJpy)} で作成します。購入後に表示するページ: ${accessUrl}`,
+    {
+      action: "create",
+      product: feature
+        ? { name, price_jpy: priceJpy, access_type: "feature", metadata }
+        : file
+          ? {
+              name,
+              price_jpy: priceJpy,
+              access_type: "file",
+              file_ids: givenIds,
+              files_to_upload: paths,
+            }
+          : { name, price_jpy: priceJpy, access_url: accessUrl },
+    },
   );
-  const { creator_id: creatorId, environment } = await getAccount();
+  // 手元のファイルは確認のあとで上げる。上げ終えたファイルは、作成に失敗しても残る。
+  let uploadedIds: string[] = [];
+  if (paths.length > 0) {
+    if (!upload)
+      throw new CliError("internal", "想定外のエラーで中断しました。");
+    uploadedIds = (await uploadPaths(session, context, paths, upload)).map(
+      (entry) => entry.id,
+    );
+  }
+  const fileIds = [...givenIds, ...uploadedIds];
+  const product: CreateProduct = feature
+    ? { name, price_jpy: priceJpy, access_type: "feature", metadata }
+    : file
+      ? { name, price_jpy: priceJpy, access_type: "file", file_ids: fileIds }
+      : { name, price_jpy: priceJpy, access_url: accessUrl as string };
+  try {
+    return await createWithKey(session, context, store, input, product, {
+      feature,
+      metadata,
+      accessUrl,
+      fileIds,
+      environment: (await getAccount()).environment,
+      creatorId: (await getAccount()).creator_id,
+    });
+  } catch (error) {
+    // 上げたファイルのIDを返し、作り直しで同じファイルを上げ直さずに済むようにする。
+    if (error instanceof CliError && uploadedIds.length > 0)
+      throw new CliError(error.code, error.message, {
+        hint: `上げたファイルは残っています。${CLI} products create --name "${name}" --price ${priceJpy} ${fileIds.map((id) => `--file-id ${id}`).join(" ")}${profileSuffix(session.profile)} で作り直せます。`,
+        details: { ...error.details, uploaded_file_ids: uploadedIds },
+      });
+    throw error;
+  }
+}
+
+async function createWithKey(
+  session: Session,
+  context: CommandContext,
+  store: Store,
+  input: ProductInput,
+  product: CreateProduct,
+  meta: {
+    feature: boolean;
+    metadata: FeatureFlagMetadata;
+    accessUrl?: string;
+    fileIds: string[];
+    environment: string;
+    creatorId: string;
+  },
+): Promise<Output> {
+  const { feature, metadata, accessUrl, fileIds, environment, creatorId } =
+    meta;
   // タイムアウト後の再実行で商品が二重にならないよう、入力ごとの冪等キーを送信前に保存する。
   // 限定ページのハッシュは従来のまま変えない（導入の途中のキーを使い回せるように）。
   const hash = createHash("sha256")
     .update(
       JSON.stringify(
-        accessUrl === undefined
+        feature
           ? [
               session.profile.name,
               creatorId,
@@ -643,13 +744,22 @@ export async function createProduct(
                 a < b ? -1 : a > b ? 1 : 0,
               ),
             ]
-          : [
-              session.profile.name,
-              creatorId,
-              product.name,
-              product.price_jpy,
-              accessUrl,
-            ],
+          : accessUrl === undefined
+            ? [
+                session.profile.name,
+                creatorId,
+                product.name,
+                product.price_jpy,
+                "file",
+                fileIds,
+              ]
+            : [
+                session.profile.name,
+                creatorId,
+                product.name,
+                product.price_jpy,
+                accessUrl,
+              ],
       ),
     )
     .digest("hex");
@@ -718,6 +828,11 @@ export async function createProduct(
       feature
         ? `公開の購入リンク（購入ボタンには使わず、サーバーの createCheckout を使う）: ${result.url}`
         : `購入リンク: ${result.url}`,
+      ...(fileIds.length > 0
+        ? [
+            `ファイル: ${fileIds.join(", ")}（購入した人は購入後の画面と購入者ポータルからダウンロードできます）`,
+          ]
+        : []),
     ],
   };
 }

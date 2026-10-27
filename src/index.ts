@@ -68,9 +68,9 @@ export interface Account {
 }
 // 機能フラグの設定値。件数・キー・値の制約はAPI側で検証する。秘匿情報は入れない。
 export type FeatureFlagMetadata = Record<string, string | number | boolean>;
-// 商品の種類。作成できるのは page と feature で、file は応答にだけ現れる。
+// 商品の種類。page（購入者限定ページ）・feature（機能フラグ）・file（ファイル）。
 export type AccessType = "page" | "feature" | "file";
-// 作成の入力は access_type で2形に分かれる（API契約のoneOfと同じ）。
+// 作成の入力は access_type で分かれる（API契約のoneOfと同じ）。
 export type CreateProduct =
   | {
       name: string;
@@ -79,6 +79,7 @@ export type CreateProduct =
       access_url: string;
       // 型で混ぜ書きを止める（API側も400）。
       metadata?: never;
+      file_ids?: never;
       // Markdown。前後の空白を除いて4000コードポイントまで。null・空白だけなら説明なし。
       // 長さはSDKでは検証せず、サーバーの判定（invalid_input）に任せる。
       description?: string | null;
@@ -89,6 +90,17 @@ export type CreateProduct =
       access_type: "feature";
       metadata?: FeatureFlagMetadata;
       access_url?: never;
+      file_ids?: never;
+      description?: string | null;
+    }
+  | {
+      name: string;
+      price_jpy: number;
+      access_type: "file";
+      // files.upload で上げたファイルのID（1〜20件）。購入者はこれらをダウンロードできる。
+      file_ids: string[];
+      access_url?: never;
+      metadata?: never;
       description?: string | null;
     };
 // Partial<CreateProduct> はunionのPartialになりAPIが受け付ける形と違うので明示する。
@@ -98,6 +110,8 @@ export interface UpdateProduct {
   price_jpy?: number;
   access_url?: string;
   metadata?: FeatureFlagMetadata;
+  // ファイルの商品のファイルを入れ替える。既存の購入者にもすぐ反映される。
+  file_ids?: string[];
   description?: string | null;
 }
 export interface ProductImage {
@@ -118,9 +132,44 @@ export interface Product {
   metadata: FeatureFlagMetadata;
   description: string | null;
   images: ProductImage[];
+  // ファイルの商品のファイル（それ以外は空配列）。古いAPIは返さないため任意項目にする。
+  files?: ProductFile[];
   status: "active" | "archived";
   created_at: string;
   updated_at: string;
+}
+export interface ProductFile {
+  id: string;
+  filename: string;
+  size_bytes: number;
+  // 運営が配信を止めたファイル。購入者はダウンロードできない。
+  disabled: boolean;
+}
+// ファイルの商品に付けるファイル。上限は1ファイル2GiB・合計20GiB（サーバーが判定する）。
+export interface DownloadableFile {
+  id: string;
+  filename: string;
+  size_bytes: number;
+  status: "uploading" | "uploaded";
+  disabled: boolean;
+  // このファイルを付けている商品。空ならどの商品にも付いていない。
+  product_ids: string[];
+  created_at: string;
+}
+export interface DownloadableFileList {
+  data: DownloadableFile[];
+  used_bytes: number;
+  limit_bytes: number;
+}
+// アップロードの開始。最後以外のパートはちょうど part_size バイトで送る。
+export interface FileUploadStart {
+  id: string;
+  part_size: number;
+  part_count: number;
+}
+export interface UploadedPart {
+  part_number: number;
+  etag: string;
 }
 export interface ProductList {
   items: Product[];
@@ -396,6 +445,45 @@ export function createManagementClient(options: ManagementClientOptions) {
       // 画像が無くても200で商品を返す。
       deleteImage: async (productId: string) =>
         request<Product>(`/products/${identifier(productId)}/image`, "DELETE"),
+    },
+    // ファイルの商品に付けるファイル。create → uploadPart（1から番号順に1つずつ）→ complete の順に呼ぶ。
+    files: {
+      list: () => request<DownloadableFileList>("/files", "GET"),
+      create: (input: { filename: string; size_bytes: number }) =>
+        request<FileUploadStart>("/files", "POST", input),
+      // パートの本文はバイト列で渡す。最後以外は create が返した part_size ちょうど。
+      uploadPart: async (
+        fileId: string,
+        partNumber: number,
+        body: Uint8Array,
+      ) => {
+        if (
+          !Number.isInteger(partNumber) ||
+          partNumber < 1 ||
+          !(body instanceof Uint8Array)
+        )
+          throw new CozeniError("invalid_input");
+        return request<UploadedPart>(
+          `/files/${identifier(fileId)}/parts/${partNumber}`,
+          "PUT",
+          body,
+        );
+      },
+      // 何度呼んでも同じ結果になる（応答を受け取れなかったときは同じ内容で呼び直す）。
+      complete: (fileId: string, parts: UploadedPart[]) =>
+        request<DownloadableFile>(
+          `/files/${identifier(fileId)}/complete`,
+          "POST",
+          { parts },
+        ),
+      // 商品に付いているファイルは消せない（file_in_use）。アップロード中のものは中止になる。
+      delete: async (fileId: string) => {
+        const { response, data } = await send(
+          `/files/${identifier(fileId)}`,
+          "DELETE",
+        );
+        if (!response.ok) throw failure(response, data);
+      },
     },
     checkoutLinks: {
       get: (productId: string) =>

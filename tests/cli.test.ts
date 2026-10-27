@@ -1721,3 +1721,324 @@ describe("loginの冪等化とクリエイターの照合", () => {
     expect(t.parsed().data.expected_creator_id).toBe("cre_1");
   });
 });
+
+describe("files（ファイルの商品）", () => {
+  const uploaded = (id: string, filename: string, size: number) => ({
+    id,
+    filename,
+    size_bytes: size,
+    status: "uploaded",
+    disabled: false,
+    product_ids: [],
+    created_at: "2026-09-25T00:00:00.000Z",
+  });
+  // パートの大きさを小さくして、複数パートに分かれる流れを小さなファイルで確かめる。
+  const fileServer =
+    (overrides: Partial<Record<string, Handler>> = {}): Handler =>
+    (call) => {
+      const key = `${call.method} ${call.path.replace(`${API}/external/v1`, "")}`;
+      const custom = overrides[key];
+      if (custom) return custom(call);
+      if (key === "GET /account") return json(account);
+      if (key === "POST /files") {
+        const size = (call.body as { size_bytes: number }).size_bytes;
+        return json(
+          { id: "fil_1", part_size: 4, part_count: Math.ceil(size / 4) },
+          201,
+        );
+      }
+      const part = key.match(/^PUT \/files\/fil_1\/parts\/(\d+)$/);
+      if (part)
+        return json({ part_number: Number(part[1]), etag: `etag-${part[1]}` });
+      if (key === "POST /files/fil_1/complete")
+        return json(uploaded("fil_1", "guide.pdf", 10));
+      if (key === "DELETE /files/fil_1")
+        return new Response(null, { status: 204 });
+      if (key === "POST /products")
+        return json(
+          {
+            ...product,
+            id: "prd_file",
+            access_type: "file",
+            access_url: null,
+            metadata: {},
+            files: [
+              {
+                id: "fil_1",
+                filename: "guide.pdf",
+                size_bytes: 10,
+                disabled: false,
+              },
+            ],
+          },
+          201,
+        );
+      if (key === "PUT /products/prd_file/checkout-link")
+        return json({ ...link, product_id: "prd_file" });
+      if (key.startsWith("GET /products"))
+        return json({ items: [], next_cursor: null });
+      return json({}, 404);
+    };
+  const writeLocal = async (name: string, content: string) => {
+    await writeFile(join(home, name), content);
+  };
+  const bytes = (init: RequestInit) =>
+    new TextDecoder().decode(init.body as Uint8Array);
+
+  it("files upload はパートを番号順に1つずつバイト列で送り、完了してIDを返す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(fileServer());
+    const { code, err } = await t.run("files", "upload", "guide.pdf", "--json");
+    expect(code).toBe(0);
+    expect(t.parsed().data.file_ids).toEqual(["fil_1"]);
+    expect(t.calls.find((call) => call.method === "POST")?.body).toEqual({
+      filename: "guide.pdf",
+      size_bytes: 10,
+    });
+    const parts = t.calls.filter((call) => call.method === "PUT");
+    expect(parts.map((call) => call.path.split("/").pop())).toEqual([
+      "1",
+      "2",
+      "3",
+    ]);
+    expect(parts.map((call) => bytes(call.init))).toEqual([
+      "0123",
+      "4567",
+      "89",
+    ]);
+    expect(parts[0]?.headers.get("Content-Type")).toBe(
+      "application/octet-stream",
+    );
+    const complete = t.calls.find((call) => call.path.endsWith("/complete"));
+    expect(complete?.body).toEqual({
+      parts: [
+        { part_number: 1, etag: "etag-1" },
+        { part_number: 2, etag: "etag-2" },
+        { part_number: 3, etag: "etag-3" },
+      ],
+    });
+    expect(err).toContain("guide.pdf: 100%（3/3）");
+  });
+  it("一時的な失敗のパートだけ送り直す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    let failed = false;
+    const t = cli(
+      fileServer({
+        "PUT /files/fil_1/parts/2": () => {
+          if (!failed) {
+            failed = true;
+            return apiError("unavailable", 503);
+          }
+          return json({ part_number: 2, etag: "etag-2" });
+        },
+      }),
+    );
+    expect((await t.run("files", "upload", "guide.pdf", "--json")).code).toBe(
+      0,
+    );
+    const parts = t.calls.filter((call) => call.method === "PUT");
+    expect(parts.map((call) => call.path.split("/").pop())).toEqual([
+      "1",
+      "2",
+      "2",
+      "3",
+    ]);
+  });
+  it("送り直しても直らない失敗では、アップロードを中止して終わる", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(
+      fileServer({
+        "PUT /files/fil_1/parts/2": () => apiError("invalid_part", 400),
+      }),
+    );
+    expect(
+      (await t.run("files", "upload", "guide.pdf", "--json")).code,
+    ).not.toBe(0);
+    expect(t.calls.filter((call) => call.method === "PUT")).toHaveLength(2);
+    expect(t.calls.some((call) => call.method === "DELETE")).toBe(true);
+  });
+  it("2GBを超えるファイルは送る前に止める", async () => {
+    await saveLogin();
+    const { truncate } = await import("node:fs/promises");
+    await writeLocal("big.zip", "");
+    await truncate(join(home, "big.zip"), 2 * 1024 * 1024 * 1024 + 1);
+    const t = cli(fileServer());
+    expect((await t.run("files", "upload", "big.zip", "--json")).code).toBe(2);
+    expect(t.parsed().error.code).toBe("file_too_large");
+    expect(t.calls.some((call) => call.path.includes("/files"))).toBe(false);
+  });
+  it("合計の容量を超えると storage_quota_exceeded を返す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(
+      fileServer({
+        "POST /files": () => apiError("storage_quota_exceeded", 409),
+      }),
+    );
+    expect((await t.run("files", "upload", "guide.pdf", "--json")).code).toBe(
+      4,
+    );
+    expect(t.parsed().error.code).toBe("storage_quota_exceeded");
+  });
+  it("products create --file は確認のあとに上げ、access_type: file と file_ids で作る", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const args = [
+      "products",
+      "create",
+      "--name",
+      "資料集",
+      "--price",
+      "1000",
+      "--file",
+      "guide.pdf",
+    ];
+    const unconfirmed = cli(fileServer());
+    expect((await unconfirmed.run(...args, "--json")).code).toBe(2);
+    expect(unconfirmed.parsed().error.message).toContain(
+      "種類: ファイル（guide.pdf）",
+    );
+    expect(unconfirmed.calls.some((call) => call.path.includes("/files"))).toBe(
+      false,
+    );
+    const t = cli(fileServer());
+    expect((await t.run(...args, "--yes", "--json")).code).toBe(0);
+    const post = t.calls.find(
+      (call) => call.method === "POST" && call.path.endsWith("/products"),
+    );
+    expect(post?.body).toEqual({
+      name: "資料集",
+      price_jpy: 1000,
+      access_type: "file",
+      file_ids: ["fil_1"],
+    });
+    expect(t.parsed().data.product.files).toHaveLength(1);
+  });
+  it("作成に失敗しても、上げたファイルのIDを返す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(
+      fileServer({ "POST /products": () => apiError("invalid_input", 400) }),
+    );
+    await t.run(
+      "products",
+      "create",
+      "--name",
+      "資料集",
+      "--price",
+      "1000",
+      "--file",
+      "guide.pdf",
+      "--yes",
+      "--json",
+    );
+    const error = t.parsed().error;
+    expect(error.uploaded_file_ids).toEqual(["fil_1"]);
+    expect(error.hint).toContain("--file-id fil_1");
+  });
+  it("--file-id で上げ済みのファイルから作り、--access-url とは同時に使えない", async () => {
+    await saveLogin();
+    const t = cli(fileServer());
+    expect(
+      (
+        await t.run(
+          "products",
+          "create",
+          "--name",
+          "資料集",
+          "--price",
+          "1000",
+          "--file-id",
+          "fil_1",
+          "--yes",
+          "--json",
+        )
+      ).code,
+    ).toBe(0);
+    expect(t.calls.find((call) => call.method === "POST")?.body).toMatchObject({
+      access_type: "file",
+      file_ids: ["fil_1"],
+    });
+    const mixed = cli(fileServer());
+    expect(
+      (
+        await mixed.run(
+          "products",
+          "create",
+          "--name",
+          "資料集",
+          "--price",
+          "1000",
+          "--file-id",
+          "fil_1",
+          "--access-url",
+          "https://site.example/members",
+          "--yes",
+          "--json",
+        )
+      ).code,
+    ).toBe(2);
+    expect(mixed.calls).toHaveLength(0);
+  });
+  it("files delete は確認が要り、商品に付いていれば file_in_use", async () => {
+    await saveLogin();
+    const t = cli(fileServer());
+    expect((await t.run("files", "delete", "fil_1", "--json")).code).toBe(2);
+    expect(t.parsed().error.code).toBe("confirmation_required");
+    expect(
+      (await t.run("files", "delete", "fil_1", "--yes", "--json")).code,
+    ).toBe(0);
+    expect(t.parsed().data).toEqual({ file_id: "fil_1", deleted: true });
+    const used = cli(
+      fileServer({ "DELETE /files/fil_1": () => apiError("file_in_use", 409) }),
+    );
+    expect(
+      (await used.run("files", "delete", "fil_1", "--yes", "--json")).code,
+    ).toBe(4);
+    expect(used.parsed().error.code).toBe("file_in_use");
+  });
+  it("files list は一覧と使用量を出し、products get はファイルを並べる", async () => {
+    await saveLogin();
+    const t = cli(
+      fileServer({
+        "GET /files": () =>
+          json({
+            data: [{ ...uploaded("fil_1", "guide.pdf", 10), disabled: true }],
+            used_bytes: 10,
+            limit_bytes: 20 * 1024 ** 3,
+          }),
+        "GET /products/prd_file": () =>
+          json({
+            ...product,
+            id: "prd_file",
+            access_type: "file",
+            access_url: null,
+            metadata: {},
+            files: [
+              {
+                id: "fil_1",
+                filename: "guide.pdf",
+                size_bytes: 10,
+                disabled: true,
+              },
+            ],
+          }),
+        "GET /products/prd_file/checkout-link": () =>
+          apiError("checkout_link_not_found", 404),
+      }),
+    );
+    const list = await t.run("files", "list");
+    expect(list.out).toContain(
+      "- fil_1 guide.pdf 10 B（配信停止中・どの商品にも付いていない）",
+    );
+    expect(list.out).toContain("使用量: 10 B / 20.0 GB");
+    const get = await t.run("products", "get", "prd_file");
+    expect(get.out).toContain(
+      "- prd_file ハンドブック 1,000円 ファイル（1件）",
+    );
+    expect(get.out).toContain("  - fil_1 guide.pdf 10 B（配信停止中）");
+  });
+});
