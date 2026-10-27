@@ -100,7 +100,11 @@ npx cozeni <コマンド> [--json] [--profile <名前>] [--yes]
 | `products list` | 商品一覧 |
 | `products get <商品ID>` | 商品1件と購入リンクの状態（取得だけで、リンクを発行しない） |
 | `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す。同じ内容の有効な商品があれば作らずにそれを返す（`--allow-duplicate` で作る） |
+| `products create --name <名前> --price <円> (--file <パス> … \| --file-id <ID> …)` | ファイルの商品を作成する。`--file` は手元のファイルを上げてから作る（1商品20ファイル・1ファイル2GBまで） |
 | `products update <商品ID> [--name] [--price] [--access-url]` | 商品を変更する |
+| `files list` | ファイルの商品に付けるファイルの一覧と使用量 |
+| `files upload <パス> …` | ファイルを上げてIDを返す。10MiBずつ番号順に送り、進捗は標準エラーに出す |
+| `files delete <ファイルID>` | ファイルを削除する（確認が必要。商品に付いているファイルは消せない） |
 | `link <商品ID>` | 標準の購入リンクを取得する（無ければ発行） |
 | `test-purchase --product <商品ID> --site-origin <URL>` | サンドボックス専用。テスト購入して限定ページに入れることを確かめ、返金する（上の「テスト購入」） |
 | `switch` | 本番にログイン済みで期待するクリエイターと一致していれば、既定のプロファイルを `production` にする（上の「本番へ切り替える」） |
@@ -205,6 +209,24 @@ const withoutImage = await client.products.deleteImage(product.id);
 ほかに `account.get`、`products.list` / `get` / `update`、`checkoutLinks.ensure` があります。商品の種類は `access_type`（`'page'` 購入者限定ページ・`'feature'` 機能フラグ）で、作成で省略すると `'page'` です。`'feature'` の商品は `access_url` を持たず、`metadata`（設定値）を持てます。応答の `access_url` は、URLを持たない商品（`feature`・`file`）では `null` です。商品の種類の判定には `access_url` ではなく `access_type` を使います。`access_type` は作成後に変えられず、更新の `metadata` は全置換です（`{}` で全消去、省略で変更なし）。`price_jpy` は円をそのまま渡します。`create` の冪等キーはPOSTより前に保存し、応答を失っても同じ入力・同じキーで再送します（自動リトライはありません）。
 
 `description` は商品の説明（Markdown）で、`create` / `update` に任意で渡します。前後の空白を除いて4000コードポイントまでで、`null`・空白だけなら説明なしです。商品の `description` は文字列か `null` で、長さはSDKでは検証せずサーバーの判定（`invalid_input`）に任せます。
+
+ファイルの商品（`access_type: 'file'`）は、先に `files` でファイルを上げ、そのIDを `file_ids` に渡して作ります。購入者は、購入後の画面と購入者ポータルからファイルをダウンロードします。サイトに置くのは購入ボタン（購入リンク）だけで、購入者限定ページとゲートの組み込みは要りません。
+
+```ts
+const start = await client.files.create({ filename: 'guide.pdf', size_bytes: bytes.byteLength });
+const parts = [];
+for (let n = 1; n <= start.part_count; n += 1) {
+  const chunk = bytes.subarray((n - 1) * start.part_size, n * start.part_size);
+  parts.push(await client.files.uploadPart(start.id, n, chunk)); // 番号順に1つずつ
+}
+await client.files.complete(start.id, parts);
+const fileProduct = await client.products.create(
+  { name: '資料集', price_jpy: 1500, access_type: 'file', file_ids: [start.id] },
+  { idempotencyKey: crypto.randomUUID() },
+);
+```
+
+最後以外のパートは `part_size` ちょうどにします。上限は1ファイル2GiB・合計20GiBで、超えると `file_too_large` / `storage_quota_exceeded` になります。`files.list()` は一覧と使用量（`used_bytes` / `limit_bytes`）を返し、`files.delete(id)` は商品に付いていないファイルを消します（付いていれば `file_in_use`）。商品の応答の `files` に、付いているファイル（運営が配信を止めたものは `disabled: true`）が入ります。
 
 商品画像は `products.putImage(productId, file)`（`PUT /products/{product_id}/image`、`externalPutProductImage`）で設定し、`products.deleteImage(productId)`（`DELETE /products/{product_id}/image`、`externalDeleteProductImage`）で外します。どちらも更新後の商品を返し、`images` に `id` / `url` / `content_type` / `size_bytes` が入ります。
 
