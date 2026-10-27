@@ -16,6 +16,9 @@ export const MAX_FILES_PER_PRODUCT = 20;
 export const PART_TIMEOUT_MS = 120_000;
 /** 失敗したパートを送り直す回数（最初の1回を含めない）。 */
 const PART_RETRIES = 3;
+/** 1パートで 429 を待つ上限の回数と、Retry-After が無いときの待ち秒数。 */
+const RATE_LIMIT_WAITS = 10;
+const DEFAULT_RETRY_AFTER_SECONDS = 10;
 
 export interface UploadOptions {
   cwd: string;
@@ -238,7 +241,9 @@ async function uploadOne(
         session,
         context,
         async () => {
-          for (let attempt = 0; ; attempt += 1) {
+          let attempt = 0;
+          let rateLimitWaits = 0;
+          for (;;) {
             try {
               const { response, data } = await send(
                 `/files/${encodeURIComponent(started.id)}/parts/${number}`,
@@ -250,8 +255,23 @@ async function uploadOne(
                 throw new CozeniError("invalid_response", response.status);
               return data.etag;
             } catch (error) {
+              // パートの送信もキー単位のレート制限に数えられる。速い回線で大きなファイルを送ると
+              // 429 になるので、Retry-After だけ待って同じパートを送り直す（障害の再試行回数とは別に数える）。
+              if (
+                error instanceof CozeniError &&
+                error.code === "rate_limited" &&
+                rateLimitWaits < RATE_LIMIT_WAITS
+              ) {
+                rateLimitWaits += 1;
+                await options.sleep(
+                  (error.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS) *
+                    1000,
+                );
+                continue;
+              }
               if (!retryable(error) || attempt >= PART_RETRIES) throw error;
               await options.sleep(1000 * 2 ** attempt);
+              attempt += 1;
             }
           }
         },

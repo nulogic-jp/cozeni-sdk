@@ -1846,6 +1846,51 @@ describe("files（ファイルの商品）", () => {
       "3",
     ]);
   });
+  it("パートが429になったら、障害の再試行回数とは別にRetry-Afterだけ待って送り直す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    let limited = 0;
+    const t = cli(
+      fileServer({
+        "PUT /files/fil_1/parts/2": () => {
+          if (limited < 5) {
+            limited += 1;
+            return new Response(
+              JSON.stringify({
+                error: {
+                  code: "rate_limited",
+                  message: "x",
+                  request_id: "req_test",
+                },
+              }),
+              {
+                status: 429,
+                headers: {
+                  "Content-Type": "application/json",
+                  "Retry-After": "30",
+                },
+              },
+            );
+          }
+          return json({ part_number: 2, etag: "etag-2" });
+        },
+      }),
+    );
+    expect((await t.run("files", "upload", "guide.pdf", "--json")).code).toBe(
+      0,
+    );
+    const parts = t.calls.filter((call) => call.method === "PUT");
+    expect(parts.map((call) => call.path.split("/").pop())).toEqual([
+      "1",
+      "2",
+      "2",
+      "2",
+      "2",
+      "2",
+      "2",
+      "3",
+    ]);
+  });
   it("送り直しても直らない失敗では、アップロードを中止して終わる", async () => {
     await saveLogin();
     await writeLocal("guide.pdf", "0123456789");
