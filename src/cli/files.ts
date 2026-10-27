@@ -190,6 +190,19 @@ async function localFile(cwd: string, path: string) {
   return { absolute, size, filename: basename(absolute) };
 }
 
+/** 手元のファイルの名前と大きさ（同じ内容の商品を探すため。上げる前の検査も兼ねる）。 */
+export async function describeLocalFiles(
+  cwd: string,
+  paths: string[],
+): Promise<{ filename: string; size_bytes: number }[]> {
+  const files: { filename: string; size_bytes: number }[] = [];
+  for (const path of paths) {
+    const local = await localFile(cwd, path);
+    files.push({ filename: local.filename, size_bytes: local.size });
+  }
+  return files;
+}
+
 /** 1ファイルを上げる。失敗・中断したらサーバーのアップロードを中止する（できる範囲で）。 */
 async function uploadOne(
   session: Session,

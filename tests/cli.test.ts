@@ -1962,6 +1962,52 @@ describe("files（ファイルの商品）", () => {
     });
     expect(t.parsed().data.product.files).toHaveLength(1);
   });
+  it("products create --file の再実行は、名前と大きさが同じファイルの商品を上げ直さずに返す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const existing = {
+      ...product,
+      id: "prd_file",
+      name: "資料集",
+      price_jpy: 1000,
+      status: "active",
+      access_type: "file",
+      access_url: null,
+      metadata: {},
+      files: [
+        { id: "fil_9", filename: "guide.pdf", size_bytes: 10, disabled: false },
+      ],
+    };
+    const server = fileServer();
+    const t = cli((call) => {
+      if (call.method === "GET" && call.path.includes("/checkout-link"))
+        return json({ ...link, product_id: "prd_file" });
+      if (call.method === "GET" && call.path.includes("/products"))
+        return json({ items: [existing], next_cursor: null });
+      return server(call);
+    });
+    const args = ["products", "create", "--name", "資料集", "--price", "1000"];
+    expect(
+      (await t.run(...args, "--file", "guide.pdf", "--yes", "--json")).code,
+    ).toBe(0);
+    expect(t.parsed().data.reused).toBe(true);
+    expect(t.parsed().data.product.id).toBe("prd_file");
+    expect(t.calls.some((call) => call.path.includes("/files"))).toBe(false);
+    // 大きさが違えば別の内容として作る
+    await writeLocal("guide.pdf", "01234567890");
+    const other = cli((call) => {
+      if (call.method === "GET" && call.path.includes("/checkout-link"))
+        return json({ ...link, product_id: "prd_file" });
+      if (call.method === "GET" && call.path.includes("/products"))
+        return json({ items: [existing], next_cursor: null });
+      return server(call);
+    });
+    expect(
+      (await other.run(...args, "--file", "guide.pdf", "--yes", "--json")).code,
+    ).toBe(0);
+    expect(other.parsed().data.reused).toBe(false);
+    expect(other.calls.some((call) => call.path.includes("/files"))).toBe(true);
+  });
   it("作成に失敗しても、上げたファイルのIDを返す", async () => {
     await saveLogin();
     await writeLocal("guide.pdf", "0123456789");

@@ -21,6 +21,7 @@ import {
 } from "./api.js";
 import { CliError } from "./errors.js";
 import {
+  describeLocalFiles,
   fileSize,
   MAX_FILES_PER_PRODUCT,
   type UploadOptions,
@@ -599,8 +600,25 @@ export async function createProduct(
     ));
   // 導入のやり直しで同じ商品が増えないよう、作る前に同じ内容の有効な商品を探す。
   // 見つかれば作らず（確認も要らない）、それを返す。購入リンクは取得だけで、発行しない。
-  // 手元のファイルを上げて作る場合は、上げるたびにIDが変わるので探さない。
-  if (!input["allow-duplicate"] && paths.length === 0) {
+  // 手元のファイルは上げるたびにIDが変わるので、ファイル名と大きさで照合する
+  // （導入のやり直しで、同じファイルを上げ直して商品を増やさないため）。
+  if (!input["allow-duplicate"]) {
+    const local =
+      paths.length > 0 && upload
+        ? await describeLocalFiles(upload.cwd, paths)
+        : [];
+    const sameFiles = (
+      files: { id: string; filename: string; size_bytes: number }[],
+    ) =>
+      files.length === givenIds.length + local.length &&
+      givenIds.every((id, index) => files[index]?.id === id) &&
+      local.every((entry, index) => {
+        const item = files[givenIds.length + index];
+        return (
+          item?.filename === entry.filename &&
+          item.size_bytes === entry.size_bytes
+        );
+      });
     const same = (await allProducts(session, context)).find(
       (item) =>
         item.status === "active" &&
@@ -612,8 +630,7 @@ export async function createProduct(
           : file
             ? item.access_type === "file" &&
               item.files !== undefined &&
-              item.files.map((entry) => entry.id).join(",") ===
-                givenIds.join(",")
+              sameFiles(item.files)
             : // URLを持たない商品（feature・file）は限定ページの商品と同じにならない。
               item.access_type !== "feature" &&
               item.access_type !== "file" &&
