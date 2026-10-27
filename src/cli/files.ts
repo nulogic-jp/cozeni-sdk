@@ -4,7 +4,7 @@ import { open, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { DownloadableFile, UploadedPart } from "../index.js";
 import { CozeniError, failure, record } from "../transport.js";
-import { CLI, profileSuffix, type Session } from "./api.js";
+import { CLI, convert, profileSuffix, type Session } from "./api.js";
 import { type CommandContext, call, type Output } from "./commands.js";
 import { CliError } from "./errors.js";
 
@@ -104,7 +104,7 @@ function fileError(error: unknown, path?: string): unknown {
         "file_in_use",
         "商品に付いているファイルは消せません。",
         {
-          hint: `先に ${CLI} products update で商品からファイルを外してください。`,
+          hint: `先に ${CLI} products update <商品ID> --file-id <残すファイルID> … で商品から外すか、管理画面の商品の編集で外してください。`,
           details,
         },
       );
@@ -203,7 +203,66 @@ export async function describeLocalFiles(
   return files;
 }
 
-/** 1ファイルを上げる。失敗・中断したらサーバーのアップロードを中止する（できる範囲で）。 */
+/** 中断（Ctrl-C）されたことを表す。後続の完了・商品の作成へ進めない。 */
+function interrupted(): CliError {
+  return new CliError(
+    "cancelled",
+    "中断しました。途中のアップロードは取り消しました。",
+  );
+}
+
+/**
+ * 1回の要求を、429 は Retry-After だけ待って、一時的な障害は間隔を空けて送り直す。
+ * 429 の待ちは障害の再試行とは別に数え、上限に達したらそのまま失敗にする。中断されたら送り直さない。
+ */
+async function withRetries<T>(
+  request: () => Promise<T>,
+  options: UploadOptions,
+  isCancelled: () => boolean,
+): Promise<T> {
+  let attempt = 0;
+  let rateLimitWaits = 0;
+  for (;;) {
+    if (isCancelled()) throw interrupted();
+    try {
+      return await request();
+    } catch (error) {
+      if (isCancelled()) throw interrupted();
+      if (error instanceof CozeniError && error.code === "rate_limited") {
+        // パートの送信もキー単位のレート制限に数えられる。速い回線で大きなファイルを送ると 429 になる。
+        if (rateLimitWaits >= RATE_LIMIT_WAITS) throw error;
+        rateLimitWaits += 1;
+        await options.sleep(
+          (error.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS) * 1000,
+        );
+        continue;
+      }
+      if (!retryable(error) || attempt >= PART_RETRIES) throw error;
+      await options.sleep(1000 * 2 ** attempt);
+      attempt += 1;
+    }
+  }
+}
+
+/** 完了の失敗のうち、サーバーで完了したかどうか分からないもの（通信の失敗・一時的な障害）。 */
+function outcomeUnknown(error: unknown): boolean {
+  return (
+    error instanceof CozeniError &&
+    (error.code === "network_error" ||
+      error.code === "timeout" ||
+      error.code === "rate_limited" ||
+      error.code === "internal" ||
+      error.code === "unavailable" ||
+      error.code === "invalid_response")
+  );
+}
+
+/**
+ * 1ファイルを上げる。
+ * - 手元のファイルはサーバーでアップロードを始める前に開く（開けなければ何も作らない）
+ * - 中断（Ctrl-C）されたら、送信中のパートを止め、完了へ進まずにアップロードを取り消す
+ * - 完了は冪等なので一時的な失敗では送り直す。完了したか分からないまま取り消さない
+ */
 async function uploadOne(
   session: Session,
   context: CommandContext,
@@ -211,102 +270,148 @@ async function uploadOne(
   options: UploadOptions,
 ): Promise<DownloadableFile> {
   const local = await localFile(options.cwd, path);
-  const started = await fileCall(
-    session,
-    context,
-    () =>
-      session.client.files.create({
-        filename: local.filename,
-        size_bytes: local.size,
-      }),
-    path,
-  );
-  if (
-    !Number.isInteger(started.part_size) ||
-    started.part_size < 1 ||
-    started.part_count !== Math.ceil(local.size / started.part_size)
-  )
-    throw new CliError(
-      "invalid_response",
-      "Cozeni から想定外の応答がありました。",
-    );
-  const abort = async () => {
-    try {
-      await session.client.files.delete(started.id);
-    } catch {
-      // 後始末の失敗では元の失敗を隠さない。残ったものはサーバーが一定期間後に片づける。
-    }
-  };
-  const release = options.onInterrupt?.(abort);
-  const handle = await open(local.absolute, "r");
-  let completed = false;
+  let handle: Awaited<ReturnType<typeof open>>;
   try {
-    const send = session.send(PART_TIMEOUT_MS);
-    const parts: UploadedPart[] = [];
-    for (let number = 1; number <= started.part_count; number += 1) {
-      const position = (number - 1) * started.part_size;
-      const body = await readPart(
-        handle,
-        position,
-        Math.min(started.part_size, local.size - position),
-      );
-      const etag = await fileCall(
-        session,
-        context,
-        async () => {
-          let attempt = 0;
-          let rateLimitWaits = 0;
-          for (;;) {
-            try {
-              const { response, data } = await send(
-                `/files/${encodeURIComponent(started.id)}/parts/${number}`,
-                "PUT",
-                body,
-              );
-              if (!response.ok) throw failure(response, data);
-              if (!record(data) || typeof data.etag !== "string")
-                throw new CozeniError("invalid_response", response.status);
-              return data.etag;
-            } catch (error) {
-              // パートの送信もキー単位のレート制限に数えられる。速い回線で大きなファイルを送ると
-              // 429 になるので、Retry-After だけ待って同じパートを送り直す（障害の再試行回数とは別に数える）。
-              if (
-                error instanceof CozeniError &&
-                error.code === "rate_limited" &&
-                rateLimitWaits < RATE_LIMIT_WAITS
-              ) {
-                rateLimitWaits += 1;
-                await options.sleep(
-                  (error.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS) *
-                    1000,
-                );
-                continue;
-              }
-              if (!retryable(error) || attempt >= PART_RETRIES) throw error;
-              await options.sleep(1000 * 2 ** attempt);
-              attempt += 1;
-            }
-          }
-        },
-        path,
-      );
-      parts.push({ part_number: number, etag });
-      options.progress(
-        `${local.filename}: ${Math.floor((number / started.part_count) * 100)}%（${number}/${started.part_count}）`,
-      );
-    }
-    const file = await fileCall(
+    handle = await open(local.absolute, "r");
+  } catch {
+    throw new CliError("invalid_input", `ファイルを読めません: ${path}`, {
+      hint: "パスとファイルの読み取り権限を確認してください。",
+    });
+  }
+  try {
+    const started = await fileCall(
       session,
       context,
-      () => session.client.files.complete(started.id, parts),
+      () =>
+        session.client.files.create({
+          filename: local.filename,
+          size_bytes: local.size,
+        }),
       path,
     );
-    completed = true;
-    return file;
+    // ここから先で失敗・中断したら、サーバーのアップロードを取り消す（完了したか分からないときを除く）。
+    const controller = new AbortController();
+    let cancelled = false;
+    let discarding: Promise<void> | undefined;
+    const discard = () =>
+      (discarding ??= (async () => {
+        try {
+          await session.client.files.delete(started.id);
+        } catch {
+          // 後始末の失敗では元の失敗を隠さない。残ったものは files list で確かめて消せる。
+        }
+      })());
+    const release = options.onInterrupt?.(async () => {
+      cancelled = true;
+      controller.abort();
+      await discard();
+    });
+    const isCancelled = () => cancelled;
+    let state: "uploading" | "completed" | "unknown" = "uploading";
+    try {
+      if (
+        !Number.isInteger(started.part_size) ||
+        started.part_size < 1 ||
+        started.part_count !== Math.ceil(local.size / started.part_size)
+      )
+        throw new CliError(
+          "invalid_response",
+          "Cozeni から想定外の応答がありました。",
+        );
+      const send = session.send(PART_TIMEOUT_MS);
+      const parts: UploadedPart[] = [];
+      for (let number = 1; number <= started.part_count; number += 1) {
+        if (cancelled) throw interrupted();
+        const position = (number - 1) * started.part_size;
+        let body: Uint8Array;
+        try {
+          body = await readPart(
+            handle,
+            position,
+            Math.min(started.part_size, local.size - position),
+          );
+        } catch (error) {
+          if (error instanceof CliError) throw error;
+          throw new CliError("invalid_input", `ファイルを読めません: ${path}`, {
+            hint: "アップロード中にファイルを動かしたり消したりしていないか確認し、もう一度実行してください。",
+          });
+        }
+        const etag = await fileCall(
+          session,
+          context,
+          () =>
+            withRetries(
+              async () => {
+                const { response, data } = await send(
+                  `/files/${encodeURIComponent(started.id)}/parts/${number}`,
+                  "PUT",
+                  body,
+                  undefined,
+                  controller.signal,
+                );
+                if (!response.ok) throw failure(response, data);
+                if (!record(data) || typeof data.etag !== "string")
+                  throw new CozeniError("invalid_response", response.status);
+                return data.etag;
+              },
+              options,
+              isCancelled,
+            ),
+          path,
+        );
+        parts.push({ part_number: number, etag });
+        options.progress(
+          `${local.filename}: ${Math.floor((number / started.part_count) * 100)}%（${number}/${started.part_count}）`,
+        );
+      }
+      if (cancelled) throw interrupted();
+      try {
+        const file = await withRetries(
+          async () => {
+            const { response, data } = await send(
+              `/files/${encodeURIComponent(started.id)}/complete`,
+              "POST",
+              { parts },
+              undefined,
+              controller.signal,
+            );
+            if (!response.ok) throw failure(response, data);
+            if (!record(data) || typeof data.id !== "string")
+              throw new CozeniError("invalid_response", response.status);
+            return data as unknown as DownloadableFile;
+          },
+          options,
+          isCancelled,
+        );
+        state = "completed";
+        return file;
+      } catch (error) {
+        // 完了は冪等。送り直しても結果が分からないときは、上げ終えたデータを消さずに案内する。
+        // 判定は利用者向けに変換する前の失敗で行う。
+        if (!cancelled && outcomeUnknown(error)) {
+          state = "unknown";
+          throw new CliError(
+            "unavailable",
+            `${path}: アップロードの完了を確かめられませんでした。`,
+            {
+              hint: `${CLI} files list${profileSuffix(session.profile)} で ${started.id} の状態を確かめてください。アップロード済みならそのIDを --file-id で使えます。アップロード中のままなら ${CLI} files delete ${started.id} で消してから上げ直してください。`,
+              details: { file_id: started.id },
+            },
+          );
+        }
+        throw convert(fileError(error, path), {
+          apiOrigin: session.apiOrigin,
+          appOrigin: session.appOrigin,
+          session,
+          now: context.now(),
+        });
+      }
+    } finally {
+      release?.();
+      if (state === "uploading") await discard();
+    }
   } finally {
     await handle.close();
-    release?.();
-    if (!completed) await abort();
   }
 }
 
@@ -327,14 +432,17 @@ export async function uploadPaths(
       files.push(await uploadOne(session, context, path, options));
     } catch (error) {
       // 先に上げ終えたファイルは残るので、IDを返して使い回せるようにする。
-      if (error instanceof CliError && files.length > 0)
+      if (error instanceof CliError && files.length > 0) {
+        const ids = files.map((file) => file.id);
+        const kept = `先に上げ終えたファイルは残っています: ${ids.join(" ")}。商品に使うなら ${ids.map((id) => `--file-id ${id}`).join(" ")} を付け、要らなければ ${CLI} files delete <ファイルID> --yes で消してください。`;
         throw new CliError(error.code, error.message, {
-          hint: error.hint,
+          hint: error.hint ? `${error.hint}\n${kept}` : kept,
           details: {
             ...error.details,
-            uploaded_file_ids: files.map((file) => file.id),
+            uploaded_file_ids: ids,
           },
         });
+      }
       throw error;
     }
   }

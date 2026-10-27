@@ -79,6 +79,8 @@ function cli(
     },
   );
   const lineListeners: (() => void)[] = [];
+  // Ctrl-C の後始末（テストから呼んで中断を再現する）。
+  const interrupts: (() => Promise<void>)[] = [];
   const openBrowser = vi.fn();
   const prompt = vi.fn(async () => options.answer ?? "n");
   const context = (argv: string[]): CliContext => ({
@@ -102,10 +104,18 @@ function cli(
     runCommand: async () => {
       throw new Error("このテストでは子プロセスを起動しない");
     },
+    onInterrupt: (cleanup) => {
+      interrupts.push(cleanup);
+      return () => {
+        const index = interrupts.indexOf(cleanup);
+        if (index >= 0) interrupts.splice(index, 1);
+      };
+    },
   });
   return {
     state,
     calls,
+    interrupts,
     fetch,
     openBrowser,
     prompt,
@@ -1904,6 +1914,279 @@ describe("files（ファイルの商品）", () => {
     ).not.toBe(0);
     expect(t.calls.filter((call) => call.method === "PUT")).toHaveLength(2);
     expect(t.calls.some((call) => call.method === "DELETE")).toBe(true);
+  });
+  it("429の待ちが上限に達したら、障害の再試行に回さずそのまま失敗にする", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(
+      fileServer({
+        "PUT /files/fil_1/parts/2": () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "rate_limited",
+                message: "x",
+                request_id: "req_t",
+              },
+            }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "30",
+              },
+            },
+          ),
+      }),
+    );
+    const before = t.state.now;
+    expect(
+      (await t.run("files", "upload", "guide.pdf", "--json")).code,
+    ).not.toBe(0);
+    expect(t.parsed().error.code).toBe("rate_limited");
+    // 最初の1回 + 待ってからの10回。1・2・4秒の再試行は足さない。
+    expect(
+      t.calls.filter(
+        (call) => call.method === "PUT" && call.path.endsWith("/parts/2"),
+      ),
+    ).toHaveLength(11);
+    expect(t.state.now - before).toBe(30_000 * 10);
+  });
+  it("Ctrl-C で中断したら、送信中のパートを止め、完了も商品の作成もせずに取り消す", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    let t: ReturnType<typeof cli>;
+    t = cli(
+      fileServer({
+        "PUT /files/fil_1/parts/2": () => {
+          const signal = t.calls.at(-1)?.init.signal;
+          // 送信中に Ctrl-C が押された
+          void t.interrupts[0]?.();
+          return new Promise<Response>((_, reject) => {
+            if (signal?.aborted) reject(new Error("aborted"));
+            signal?.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            );
+          });
+        },
+      }),
+    );
+    const { code } = await t.run(
+      "products",
+      "create",
+      "--name",
+      "資料集",
+      "--price",
+      "1000",
+      "--file",
+      "guide.pdf",
+      "--yes",
+      "--json",
+    );
+    expect(code).toBe(2);
+    expect(t.parsed().error.code).toBe("cancelled");
+    expect(t.calls.some((call) => call.path.endsWith("/complete"))).toBe(false);
+    expect(
+      t.calls.some(
+        (call) => call.method === "POST" && call.path.endsWith("/products"),
+      ),
+    ).toBe(false);
+    expect(
+      t.calls.filter((call) => call.method === "DELETE").map((c) => c.path),
+    ).toEqual([`${API}/external/v1/files/fil_1`]);
+  });
+  it("完了は一時的な失敗なら送り直し、上げたデータを消さない", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    let failed = false;
+    const t = cli(
+      fileServer({
+        "POST /files/fil_1/complete": () => {
+          if (!failed) {
+            failed = true;
+            return apiError("unavailable", 503);
+          }
+          return json({
+            id: "fil_1",
+            filename: "guide.pdf",
+            size_bytes: 10,
+            status: "uploaded",
+            disabled: false,
+            product_ids: [],
+            created_at: "2026-09-25T00:00:00.000Z",
+          });
+        },
+      }),
+    );
+    expect((await t.run("files", "upload", "guide.pdf", "--json")).code).toBe(
+      0,
+    );
+    expect(
+      t.calls.filter((call) => call.path.endsWith("/complete")),
+    ).toHaveLength(2);
+    expect(t.calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+  it("完了したか分からないまま失敗したら、消さずにIDと確かめ方を案内する", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(
+      fileServer({
+        "POST /files/fil_1/complete": () => {
+          throw new TypeError("fetch failed");
+        },
+      }),
+    );
+    expect(
+      (await t.run("files", "upload", "guide.pdf", "--json")).code,
+    ).not.toBe(0);
+    expect(t.calls.some((call) => call.method === "DELETE")).toBe(false);
+    const error = t.parsed().error;
+    expect(error.file_id).toBe("fil_1");
+    expect(error.hint).toContain("files list");
+  });
+  it("手元のファイルを開けなければ、サーバーでアップロードを始めない", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const { chmod } = await import("node:fs/promises");
+    await chmod(join(home, "guide.pdf"), 0o000);
+    const t = cli(fileServer());
+    try {
+      expect((await t.run("files", "upload", "guide.pdf", "--json")).code).toBe(
+        2,
+      );
+      expect(t.parsed().error.code).toBe("invalid_input");
+      expect(t.calls.some((call) => call.path.includes("/files"))).toBe(false);
+    } finally {
+      await chmod(join(home, "guide.pdf"), 0o644);
+    }
+  });
+  it("複数のうち途中で失敗したら、上げ終えたファイルのIDと使い方を通常の出力にも出す", async () => {
+    await saveLogin();
+    await writeLocal("a.pdf", "0123");
+    await writeLocal("b.pdf", "4567");
+    let started = 0;
+    const t = cli(
+      fileServer({
+        "POST /files": () => {
+          started += 1;
+          return started === 1
+            ? json({ id: "fil_1", part_size: 4, part_count: 1 }, 201)
+            : apiError("storage_quota_exceeded", 409);
+        },
+      }),
+    );
+    const { code, err } = await t.run("files", "upload", "a.pdf", "b.pdf");
+    expect(code).toBe(4);
+    expect(err).toContain("先に上げ終えたファイルは残っています: fil_1");
+    expect(err).toContain("--file-id fil_1");
+    expect(err).toContain("files delete");
+  });
+  it("作り直しの案内の商品名は、シェルにそのまま貼れるよう引用する", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const t = cli(
+      fileServer({ "POST /products": () => apiError("invalid_input", 400) }),
+    );
+    await t.run(
+      "products",
+      "create",
+      "--name",
+      `Tom's "$(rm)" 集`,
+      "--price",
+      "1000",
+      "--file",
+      "guide.pdf",
+      "--yes",
+      "--json",
+    );
+    expect(t.parsed().error.hint).toContain(`--name 'Tom'\\''s "$(rm)" 集'`);
+  });
+  it("商品の作成の応答だけが失われても、--file の再実行は同じ商品を返し、上げ直さない", async () => {
+    await saveLogin();
+    await writeLocal("guide.pdf", "0123456789");
+    const created = {
+      ...product,
+      id: "prd_file",
+      name: "資料集",
+      price_jpy: 1000,
+      status: "active",
+      access_type: "file",
+      access_url: null,
+      metadata: {},
+      files: [
+        { id: "fil_1", filename: "guide.pdf", size_bytes: 10, disabled: false },
+      ],
+    };
+    let exists = false;
+    const server = fileServer({
+      "POST /products": () => {
+        // サーバーでは作られたが、応答が届かない
+        exists = true;
+        throw new TypeError("fetch failed");
+      },
+    });
+    const handler: Handler = (call) => {
+      if (call.method === "GET" && call.path.includes("/checkout-link"))
+        return json({ ...link, product_id: "prd_file" });
+      if (call.method === "GET" && call.path.includes("/products"))
+        return json({ items: exists ? [created] : [], next_cursor: null });
+      return server(call);
+    };
+    const args = [
+      "products",
+      "create",
+      "--name",
+      "資料集",
+      "--price",
+      "1000",
+      "--file",
+      "guide.pdf",
+      "--yes",
+      "--json",
+    ];
+    const first = cli(handler);
+    expect((await first.run(...args)).code).not.toBe(0);
+    const second = cli(handler);
+    expect((await second.run(...args)).code).toBe(0);
+    expect(second.parsed().data.reused).toBe(true);
+    expect(second.parsed().data.product.id).toBe("prd_file");
+    expect(second.calls.some((call) => call.path.includes("/files"))).toBe(
+      false,
+    );
+  });
+  it("products update --file-id でファイルの商品のファイルを入れ替える", async () => {
+    await saveLogin();
+    const current = {
+      ...product,
+      id: "prd_file",
+      access_type: "file",
+      access_url: null,
+      metadata: {},
+      files: [
+        { id: "fil_1", filename: "a.pdf", size_bytes: 4, disabled: false },
+      ],
+    };
+    const t = cli((call) => {
+      if (call.method === "GET" && call.path.endsWith("/products/prd_file"))
+        return json(current);
+      if (call.method === "PATCH")
+        return json({
+          ...current,
+          files: [
+            { id: "fil_2", filename: "b.pdf", size_bytes: 4, disabled: false },
+          ],
+        });
+      return json(account);
+    });
+    const args = ["products", "update", "prd_file", "--file-id", "fil_2"];
+    expect((await t.run(...args, "--json")).code).toBe(2);
+    expect(t.parsed().error.message).toContain(
+      "fil_1 から fil_2 に入れ替えます",
+    );
+    expect((await t.run(...args, "--yes", "--json")).code).toBe(0);
+    expect(t.calls.find((call) => call.method === "PATCH")?.body).toEqual({
+      file_ids: ["fil_2"],
+    });
   });
   it("2GBを超えるファイルは送る前に止める", async () => {
     await saveLogin();

@@ -101,7 +101,7 @@ npx cozeni <コマンド> [--json] [--profile <名前>] [--yes]
 | `products get <商品ID>` | 商品1件と購入リンクの状態（取得だけで、リンクを発行しない） |
 | `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す。同じ内容の有効な商品があれば作らずにそれを返す（`--allow-duplicate` で作る） |
 | `products create --name <名前> --price <円> (--file <パス> … \| --file-id <ID> …)` | ファイルの商品を作成する。`--file` は手元のファイルを上げてから作る（1商品20ファイル・1ファイル2GBまで） |
-| `products update <商品ID> [--name] [--price] [--access-url]` | 商品を変更する |
+| `products update <商品ID> [--name] [--price] [--access-url] [--file-id <ID> …]` | 商品を変更する（`--file-id` はファイルの商品のファイルを指定どおりに入れ替える） |
 | `files list` | ファイルの商品に付けるファイルの一覧と使用量 |
 | `files upload <パス> …` | ファイルを上げてIDを返す。10MiBずつ番号順に送り、進捗は標準エラーに出す |
 | `files delete <ファイルID>` | ファイルを削除する（確認が必要。商品に付いているファイルは消せない） |

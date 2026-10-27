@@ -98,7 +98,14 @@ const commands: Record<string, string[]> = {
     "file",
     "file-id",
   ],
-  "products update": [...common, "yes", "name", "price", "access-url"],
+  "products update": [
+    ...common,
+    "yes",
+    "name",
+    "price",
+    "access-url",
+    "file-id",
+  ],
   "files list": common,
   "files upload": common,
   "files delete": [...common, "yes"],
@@ -133,8 +140,9 @@ const help = `Cozeni CLI ${version}
                             ファイルを上げてから作る。1商品20ファイル・1ファイル2GBまで）。
                             同じ内容の商品があれば作らずにそれを返す
                             （それでも作るなら --allow-duplicate）
-  products update <商品ID> [--name] [--price] [--access-url]
-                            商品を変更（価格・URLの変更は確認が必要）
+  products update <商品ID> [--name] [--price] [--access-url] [--file-id <ID> …]
+                            商品を変更（価格・URL・ファイルの変更は確認が必要。
+                            --file-id はファイルの商品のファイルを指定どおりに入れ替える）
   files list                ファイルの商品に付けるファイルの一覧と使用量
   files upload <パス> …     ファイルを上げてIDを返す（進捗は標準エラーに出す）
   files delete <ファイルID> ファイルを削除（確認が必要。商品に付いていると消せない）

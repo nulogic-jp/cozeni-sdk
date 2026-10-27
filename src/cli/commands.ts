@@ -550,6 +550,11 @@ function featureKeyRequest(session: Session, sandbox: boolean): string {
   return `利用者に、${place} で、権限「購入画面を作る」「購入者の機能フラグを確かめる」の API キーの発行を頼みます。キーは利用者が環境変数 COZENI_API_KEY に入れます（手元の開発ではローカルの .env.local、本番では本番の環境変数）。${sandbox ? "サンドボックスのキーなので COZENI_ENVIRONMENT=sandbox も同じ場所に入れます。" : ""}キーの値は読まない・表示しない。`;
 }
 
+/** 案内に載せるコマンドの引数を、POSIX シェルでそのまま貼れるように引用する。 */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export async function createProduct(
   session: Session,
   context: CommandContext,
@@ -721,7 +726,7 @@ export async function createProduct(
     // 上げたファイルのIDを返し、作り直しで同じファイルを上げ直さずに済むようにする。
     if (error instanceof CliError && uploadedIds.length > 0)
       throw new CliError(error.code, error.message, {
-        hint: `上げたファイルは残っています。${CLI} products create --name "${name}" --price ${priceJpy} ${fileIds.map((id) => `--file-id ${id}`).join(" ")}${profileSuffix(session.profile)} で作り直せます。`,
+        hint: `上げたファイルは残っています。${CLI} products create --name ${shellQuote(name)} --price ${priceJpy} ${fileIds.map((id) => `--file-id ${id}`).join(" ")}${profileSuffix(session.profile)} で作り直せます。`,
         details: { ...error.details, uploaded_file_ids: uploadedIds },
       });
     throw error;
@@ -885,10 +890,26 @@ export async function updateProduct(
   if (input.price !== undefined) update.price_jpy = parsePrice(input.price);
   if (input["access-url"] !== undefined)
     update.access_url = parseAccessUrl(input["access-url"]);
+  const fileIds = input["file-id"];
+  if (fileIds !== undefined) {
+    if (input["access-url"] !== undefined)
+      throw new CliError(
+        "invalid_input",
+        "--access-url と --file-id は同時に指定できません。",
+      );
+    if (fileIds.length > MAX_FILES_PER_PRODUCT)
+      throw new CliError(
+        "invalid_input",
+        `1つの商品に付けられるファイルは${MAX_FILES_PER_PRODUCT}件までです。`,
+      );
+    if (new Set(fileIds).size !== fileIds.length)
+      throw new CliError("invalid_input", "--file-id が重複しています。");
+    update.file_ids = fileIds;
+  }
   if (Object.keys(update).length === 0)
     throw new CliError(
       "invalid_input",
-      "変更する項目（--name・--price・--access-url）を指定してください。",
+      "変更する項目（--name・--price・--access-url・--file-id）を指定してください。",
     );
   const current = await call(session, context, () =>
     session.client.products.get(productId),
@@ -913,6 +934,13 @@ export async function updateProduct(
       `購入後に表示するページを ${current.access_url} から ${update.access_url} に変更します。既存の購入者全員に、すぐに反映されます。`,
     );
   }
+  if (update.file_ids !== undefined) {
+    const before = (current.files ?? []).map((file) => file.id);
+    changes.file_ids = { from: before, to: update.file_ids };
+    messages.push(
+      `ファイルを ${before.join(", ") || "なし"} から ${update.file_ids.join(", ")} に入れ替えます（並びも指定どおり）。既存の購入者全員に、すぐに反映されます。`,
+    );
+  }
   if (messages.length > 0)
     await context.confirm(messages.join("\n"), {
       action: "update",
@@ -929,6 +957,11 @@ export async function updateProduct(
       ...(updated.access_url === null
         ? []
         : [`購入後に表示するページ: ${updated.access_url}`]),
+      ...((updated.files ?? []).length > 0
+        ? [
+            `ファイル: ${(updated.files ?? []).map((file) => file.id).join(", ")}`,
+          ]
+        : []),
     ],
   };
 }
