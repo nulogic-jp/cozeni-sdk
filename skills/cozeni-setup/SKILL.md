@@ -88,6 +88,14 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
     npx cozeni products create --name "<商品名>" --price <円> --feature --metadata key=value --yes --json
     ```
 
+  - **購入者に渡すものがファイル（PDF・素材集・音声・動画など）なら**、ファイルの商品にする。利用者にファイルの場所を確かめ、同意を得たら上げてから作る（1商品20ファイル・1ファイル2GBまで。種類は作成後に変えられない）。
+
+    ```sh
+    npx cozeni products create --name "<商品名>" --price <円> --file <パス> --yes --json
+    ```
+
+    購入者は、購入後の画面と購入者ポータルからダウンロードする。サイトに置くのは購入ボタン（`data.checkout_link.url` へのリンク）だけで、ゲート（middleware・proxy）・購入者限定ページ・環境変数は要らない。6 ではボタンだけを置き、7・8 の限定ページの確認とテスト購入は行わない。作成に失敗したときは、`error.uploaded_file_ids` のファイルを `--file-id` で渡して作り直す（上げ直さない）。
+
   - 同じ内容の有効な商品がすでにあれば、作らずにそれを返す（`data.reused: true`、`data.reason: "same_product_exists"`）。それを使う。`data.checkout_link` が `null` なら、利用者に確認してから `data.next_step` の `link` を実行する。
   - `--allow-duplicate` は、利用者が同じ内容の別の商品をはっきり求めたときだけ付ける。
 

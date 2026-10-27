@@ -31,6 +31,14 @@ const knownCodes = new Set([
   // 商品画像のアップロード。5MB超（413）と、JPEG・PNG・WebP以外（415）。
   "image_too_large",
   "unsupported_image_type",
+  // ファイルの商品のファイル。大きさ（413）・合計の容量（409）・パートの不一致（400）・
+  // 見つからない（404）・完了済み（409）・商品に付いていて消せない（409）。
+  "file_too_large",
+  "storage_quota_exceeded",
+  "invalid_part",
+  "file_not_found",
+  "file_not_uploading",
+  "file_in_use",
   "rate_limited",
   "internal",
   "unavailable",
@@ -146,6 +154,8 @@ export type Send = (
   method: string,
   body?: unknown,
   extra?: Record<string, string>,
+  /** 呼び出し側から止めるためのシグナル（中断など）。止めたときは network_error になる。 */
+  signal?: AbortSignal,
 ) => Promise<{ response: Response; data: unknown }>;
 export function transport(options: ClientOptions, apiKey?: string): Send {
   serverOnly();
@@ -154,20 +164,36 @@ export function transport(options: ClientOptions, apiKey?: string): Send {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000)
     throw new CozeniError("invalid_input");
   const request = options.fetch ?? globalThis.fetch;
-  return async (path, method, body, extra) => {
+  return async (path, method, body, extra, signal) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 呼び出し側の中断は、タイムアウトと区別して network_error として返す。
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+      controller.abort();
+    };
+    if (signal?.aborted) stop();
+    else signal?.addEventListener("abort", stop, { once: true });
     try {
       const headers = new Headers({ Accept: "application/json", ...extra });
       if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
       // FormDataはContent-Typeを設定しない（boundaryをfetchが付けるため）。
       const multipart = body instanceof FormData;
+      // バイト列（ファイルのパート）はそのまま送る。Content-Lengthはfetchが付ける。
+      const binary = body instanceof Uint8Array;
       if (body !== undefined && !multipart)
-        headers.set("Content-Type", "application/json");
+        headers.set(
+          "Content-Type",
+          binary ? "application/octet-stream" : "application/json",
+        );
       const response = await request(`${base}/external/v1${path}`, {
         method,
         headers,
-        body: body === undefined || multipart ? body : JSON.stringify(body),
+        body:
+          body === undefined || multipart || binary
+            ? (body as BodyInit | undefined)
+            : JSON.stringify(body),
         signal: controller.signal,
         // リダイレクトは追わない。"error"だと通信障害と区別できないため、
         // "manual"で受けて3xx（ブラウザ互換実装ではopaqueredirect）を明示的に拒否する。
@@ -193,10 +219,11 @@ export function transport(options: ClientOptions, apiKey?: string): Send {
       if (error instanceof CozeniError) throw error;
       // fetchの例外やURLを保持しない。コード・JWT・APIキーのログ混入を防ぐ。
       throw new CozeniError(
-        controller.signal.aborted ? "timeout" : "network_error",
+        controller.signal.aborted && !stopped ? "timeout" : "network_error",
       );
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
     }
   };
 }

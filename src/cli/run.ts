@@ -24,6 +24,7 @@ import {
 } from "./commands.js";
 import { isInteractive } from "./environment.js";
 import { CliError } from "./errors.js";
+import { deleteFile, listFiles, uploadFiles } from "./files.js";
 import { init, type RunCommand } from "./init.js";
 import {
   completeLogin,
@@ -68,6 +69,8 @@ export interface CliContext {
   onLine(listener: () => void): () => void;
   /** init で package manager を実行する。テストでは差し替える。 */
   runCommand: RunCommand;
+  /** 中断（Ctrl-C）のときに呼ぶ後始末を登録する。戻り値で登録を外す。 */
+  onInterrupt?(cleanup: () => Promise<void>): () => void;
 }
 
 export const version: string = JSON.parse(
@@ -92,8 +95,20 @@ const commands: Record<string, string[]> = {
     "allow-duplicate",
     "feature",
     "metadata",
+    "file",
+    "file-id",
   ],
-  "products update": [...common, "yes", "name", "price", "access-url"],
+  "products update": [
+    ...common,
+    "yes",
+    "name",
+    "price",
+    "access-url",
+    "file-id",
+  ],
+  "files list": common,
+  "files upload": common,
+  "files delete": [...common, "yes"],
   link: common,
   "test-purchase": [...common, "product", "site-origin", "refund"],
   switch: ["json", "help"],
@@ -117,13 +132,20 @@ const help = `Cozeni CLI ${version}
   products get <商品ID>     商品1件と購入リンクの状態を表示（リンクは発行しない）
   products create --name <名前> --price <円> --access-url <URL>
   products create --name <名前> --price <円> --feature [--metadata key=value …]
+  products create --name <名前> --price <円> (--file <パス> … | --file-id <ID> …)
                             商品を作成し、購入リンクを返す（確認が必要）。
                             --feature は機能フラグの商品（--metadata は設定値で、
                             true/false・数値・文字列。種類は作成後に変えられない）。
+                            --file / --file-id はファイルの商品（--file は手元の
+                            ファイルを上げてから作る。1商品20ファイル・1ファイル2GBまで）。
                             同じ内容の商品があれば作らずにそれを返す
                             （それでも作るなら --allow-duplicate）
-  products update <商品ID> [--name] [--price] [--access-url]
-                            商品を変更（価格・URLの変更は確認が必要）
+  products update <商品ID> [--name] [--price] [--access-url] [--file-id <ID> …]
+                            商品を変更（価格・URL・ファイルの変更は確認が必要。
+                            --file-id はファイルの商品のファイルを指定どおりに入れ替える）
+  files list                ファイルの商品に付けるファイルの一覧と使用量
+  files upload <パス> …     ファイルを上げてIDを返す（進捗は標準エラーに出す）
+  files delete <ファイルID> ファイルを削除（確認が必要。商品に付いていると消せない）
   link <商品ID>             購入リンクを取得（無ければ発行）
   test-purchase --product <商品ID> --site-origin <開発サーバーのURL>
                             サンドボックスでテスト購入し、限定ページに入れる
@@ -188,6 +210,8 @@ type Flags = {
   "access-url"?: string;
   feature?: boolean;
   metadata?: string[];
+  file?: string[];
+  "file-id"?: string[];
   product?: string;
   "site-origin"?: string;
   refund?: boolean;
@@ -215,6 +239,8 @@ function parse(argv: string[]): { flags: Flags; positionals: string[] } {
         "access-url": { type: "string" },
         feature: { type: "boolean" },
         metadata: { type: "string", multiple: true },
+        file: { type: "string", multiple: true },
+        "file-id": { type: "string", multiple: true },
         product: { type: "string" },
         "site-origin": { type: "string" },
         refund: { type: "boolean" },
@@ -241,16 +267,13 @@ export async function run(context: CliContext): Promise<number> {
       return 0;
     }
     const [first, second, ...rest] = positionals;
-    const name =
-      first === "products" && second !== undefined
-        ? `${first} ${second}`
-        : first;
-    const args =
-      first === "products"
-        ? rest
-        : [second, ...rest].filter(
-            (value): value is string => value !== undefined,
-          );
+    const grouped = first === "products" || first === "files";
+    const name = grouped && second !== undefined ? `${first} ${second}` : first;
+    const args = grouped
+      ? rest
+      : [second, ...rest].filter(
+          (value): value is string => value !== undefined,
+        );
     if (flags.help || name === undefined || name === "help") {
       context.stdout.write(help);
       return 0;
@@ -270,11 +293,27 @@ export async function run(context: CliContext): Promise<number> {
         { hint: `${CLI} --help で使い方を確認してください。` },
       );
     const needsId =
-      name === "products get" || name === "products update" || name === "link";
-    if (needsId ? args.length !== 1 : args.length !== 0)
+      name === "products get" ||
+      name === "products update" ||
+      name === "link" ||
+      name === "files delete";
+    if (name === "files upload") {
+      if (args.length === 0)
+        throw new CliError(
+          "invalid_input",
+          "上げるファイルを指定してください。",
+          {
+            hint: `${CLI} --help で使い方を確認してください。`,
+          },
+        );
+    } else if (needsId ? args.length !== 1 : args.length !== 0)
       throw new CliError(
         "invalid_input",
-        needsId ? "商品IDを1つ指定してください。" : "余分な引数があります。",
+        needsId
+          ? name === "files delete"
+            ? "ファイルIDを1つ指定してください。"
+            : "商品IDを1つ指定してください。"
+          : "余分な引数があります。",
         { hint: `${CLI} --help で使い方を確認してください。` },
       );
 
@@ -450,6 +489,12 @@ export async function run(context: CliContext): Promise<number> {
     );
     await verifyCreator(current, context.now());
     const id = args[0] ?? "";
+    const upload = {
+      cwd: context.cwd,
+      progress: (line: string) => context.stderr.write(`${line}\n`),
+      sleep: context.sleep,
+      onInterrupt: context.onInterrupt,
+    };
     const output =
       name === "whoami"
         ? await whoami(current, commandContext)
@@ -460,10 +505,22 @@ export async function run(context: CliContext): Promise<number> {
             : name === "products get"
               ? await getProduct(current, commandContext, id)
               : name === "products create"
-                ? await createProduct(current, commandContext, store, flags)
+                ? await createProduct(
+                    current,
+                    commandContext,
+                    store,
+                    flags,
+                    upload,
+                  )
                 : name === "products update"
                   ? await updateProduct(current, commandContext, id, flags)
-                  : await link(current, commandContext, id);
+                  : name === "files list"
+                    ? await listFiles(current, commandContext)
+                    : name === "files upload"
+                      ? await uploadFiles(current, commandContext, args, upload)
+                      : name === "files delete"
+                        ? await deleteFile(current, commandContext, id)
+                        : await link(current, commandContext, id);
     write(context, json, output);
     return 0;
   } catch (error) {
