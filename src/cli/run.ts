@@ -93,7 +93,14 @@ const commands: Record<string, string[]> = {
     "feature",
     "metadata",
   ],
-  "products update": [...common, "yes", "name", "price", "access-url"],
+  "products update": [
+    ...common,
+    "yes",
+    "name",
+    "price",
+    "access-url",
+    "metadata",
+  ],
   link: common,
   "test-purchase": [...common, "product", "site-origin", "refund"],
   switch: ["json", "help"],
@@ -123,7 +130,9 @@ const help = `Cozeni CLI ${version}
                             同じ内容の商品があれば作らずにそれを返す
                             （それでも作るなら --allow-duplicate）
   products update <商品ID> [--name] [--price] [--access-url]
-                            商品を変更（価格・URLの変更は確認が必要）
+                            [--metadata key=value …]
+                            商品を変更（価格・URL・設定値の変更は確認が必要）。
+                            --metadata は機能フラグの商品の設定値で、全置換
   link <商品ID>             購入リンクを取得（無ければ発行）
   test-purchase --product <商品ID> --site-origin <開発サーバーのURL>
                             サンドボックスでテスト購入し、限定ページに入れる

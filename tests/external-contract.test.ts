@@ -374,6 +374,8 @@ const uncoveredOperations = [
 describe("正式外部v1契約とSDK", () => {
   it("JSONと型検査用fixtureが一致し、公開型が導入者に返る", () => {
     expect(fixture).toEqual(official);
+    // 管理画面で価格を空にして登録した商品は price_jpy が null（OpenAPI の nullable と同じ）。
+    expectTypeOf<Product["price_jpy"]>().toEqualTypeOf<number | null>();
     expectTypeOf<ReturnType<Management["account"]["get"]>>().toEqualTypeOf<
       Promise<Account>
     >();
