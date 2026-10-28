@@ -3,7 +3,7 @@ name: cozeni-setup
 description: Cozeni（@nulogic/cozeni-sdk）で有料コンテンツを販売する作業全般で使う。サイトへの購入ボタンと購入者限定ページの導入、アプリの機能を購入者だけに開く機能フラグの導入、商品の作成・価格や限定ページの変更、購入リンクの取得、「買えない」「もう売れる？」「審査は通った？」など販売状態の確認と原因の調査を扱う。
 license: MIT
 metadata:
-  cozeni-sdk-version: ">=0.8.0 <0.9.0"
+  cozeni-sdk-version: ">=0.9.0 <0.10.0"
 ---
 
 # Cozeni
@@ -75,7 +75,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 `status` の `data.products` を見て、利用者に何を売るかを確かめる。
 
-- **既存の商品を使う**：`npx cozeni products get <商品ID> --json` で内容と購入リンクを確かめる。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx cozeni link <商品ID> --json` で発行する。
+- **既存の商品を使う**：`npx cozeni products get <商品ID> --json` で内容と購入リンクを確かめる。`data.product.price_jpy` が `null`（価格未設定）の商品は、価格を設定するまで購入できない。利用者と価格（機能フラグなら設定値も）を決め、`npx cozeni products update <商品ID> --price <円> [--metadata key=value …] --json` で登録する（`--metadata` は全置換）。`data.checkout_link` が `null`（未発行）なら、利用者に確認してから `npx cozeni link <商品ID> --json` で発行する。
 - **新しく作る**：**商品名・価格（円、50〜9,999,999の整数）・有料にする機能か購入後に見せるページか・購入後に表示するページのURL**（`<siteOrigin>/<限定ページのパス>`。機能なら、代わりに上限などの設定値）を、利用者に1回でまとめて確認する（サンドボックスから始めるときは、3 の売上の受け取り先の登録の依頼と、本番の公開アドレスの確認も同じ1通に入れる）。同意を得たら次を実行する。
 
   ```sh
@@ -163,7 +163,7 @@ Cozeni の操作はすべて CLI で行い、サイトのコードには SDK の
 
 ## 確認が必要な操作
 
-商品の作成、価格の変更、購入後に表示するページ（`access_url`）の変更は、`--yes` が無ければ実行されず `confirmation_required`（終了コード2）で止まる。`access_url` の変更は、既存の購入者全員にすぐ反映される。
+商品の作成、価格の変更、購入後に表示するページ（`access_url`）と設定値（`--metadata`）の変更は、`--yes` が無ければ実行されず `confirmation_required`（終了コード2）で止まる。`access_url` と設定値の変更は、既存の購入者全員にすぐ反映される。
 
 `--yes` は、利用者が内容に同意してから付ける。`confirmation_required` が返ったら、`error.message` と `error.details` を利用者に見せて確認する。名前だけの変更は確認なしで実行される。購入リンクの発行（`link`）も、利用者に確認してから行う。
 

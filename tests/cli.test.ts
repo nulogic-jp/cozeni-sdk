@@ -1250,6 +1250,113 @@ describe("products", () => {
     );
     expect(t.parsed().error.message).toContain("購入者");
   });
+  // 管理画面で価格を空にして登録した機能フラグの商品に、AI エージェントが価格と設定値を入れる（Cozeni 07-decisions.md AG-2）。
+  describe("価格と設定値の登録（--metadata）", () => {
+    const unpriced = {
+      ...fixture.feature_product,
+      price_jpy: null,
+      metadata: {},
+    };
+    const unpricedServer = () =>
+      server({
+        [`GET /products/${unpriced.id}`]: () => json(unpriced),
+        [`PATCH /products/${unpriced.id}`]: (call) =>
+          json({ ...unpriced, ...(call.body as object) }),
+      });
+    const updateArgs = [
+      "products",
+      "update",
+      unpriced.id,
+      "--price",
+      "980",
+      "--metadata",
+      "daily_messages=100",
+      "--metadata",
+      "beta=true",
+    ];
+
+    it("価格と型つきの設定値を送る。変更は確認が必要で、変更前後を示す", async () => {
+      await saveLogin();
+      const unconfirmed = cli(unpricedServer());
+      expect((await unconfirmed.run(...updateArgs, "--json")).code).toBe(2);
+      expect(unconfirmed.parsed().error).toMatchObject({
+        code: "confirmation_required",
+        details: {
+          changes: {
+            price_jpy: { from: null, to: 980 },
+            metadata: { from: {}, to: { daily_messages: 100, beta: true } },
+          },
+        },
+      });
+      expect(unconfirmed.parsed().error.message).toContain(
+        "価格を 980円 に設定します",
+      );
+      expect(unconfirmed.parsed().error.message).toContain("既存の購入者全員");
+      expect(unconfirmed.calls.some((call) => call.method === "PATCH")).toBe(
+        false,
+      );
+
+      const t = cli(unpricedServer());
+      expect((await t.run(...updateArgs, "--yes", "--json")).code).toBe(0);
+      expect(t.calls.find((call) => call.method === "PATCH")?.body).toEqual({
+        price_jpy: 980,
+        metadata: { daily_messages: 100, beta: true },
+      });
+    });
+
+    it("設定値だけでも更新できる（全置換で送る）", async () => {
+      await saveLogin();
+      const t = cli(unpricedServer());
+      expect(
+        (
+          await t.run(
+            "products",
+            "update",
+            unpriced.id,
+            "--metadata",
+            "plan=pro",
+            "--yes",
+            "--json",
+          )
+        ).code,
+      ).toBe(0);
+      expect(t.calls.find((call) => call.method === "PATCH")?.body).toEqual({
+        metadata: { plan: "pro" },
+      });
+    });
+
+    it("機能フラグ以外の商品に --metadata を付けると送らずに止める", async () => {
+      await saveLogin();
+      const t = cli(server());
+      const { code } = await t.run(
+        "products",
+        "update",
+        "prd_1",
+        "--metadata",
+        "plan=pro",
+        "--yes",
+        "--json",
+      );
+      expect(code).toBe(2);
+      expect(t.parsed().error.code).toBe("invalid_input");
+      expect(t.calls.some((call) => call.method === "PATCH")).toBe(false);
+    });
+
+    it("価格が未設定の商品は、一覧と取得で「価格未設定」と示す", async () => {
+      await saveLogin();
+      const t = cli(
+        server({
+          [`GET /products/${unpriced.id}`]: () => json(unpriced),
+          [`GET /products/${unpriced.id}/checkout-link`]: () =>
+            json({ ...link, product_id: unpriced.id }),
+        }),
+      );
+      const { code, out } = await t.run("products", "get", unpriced.id);
+      expect(code).toBe(0);
+      expect(out).toContain("価格未設定");
+    });
+  });
+
   it("名前だけの変更は確認なしで実行する", async () => {
     await saveLogin();
     const t = cli(server());

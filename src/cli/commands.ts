@@ -32,7 +32,9 @@ export interface Output {
   human: string[];
 }
 
-const yen = (value: number) => `${value.toLocaleString("ja-JP")}円`;
+// 価格が未設定（null）の商品は、価格を設定するまで購入できない。
+const yen = (value: number | null) =>
+  value === null ? "価格未設定" : `${value.toLocaleString("ja-JP")}円`;
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 export async function call<T>(
@@ -753,14 +755,23 @@ export async function updateProduct(
   if (input.price !== undefined) update.price_jpy = parsePrice(input.price);
   if (input["access-url"] !== undefined)
     update.access_url = parseAccessUrl(input["access-url"]);
+  // 設定値は全置換で送る（書かなかったキーは消える）。
+  if (input.metadata !== undefined)
+    update.metadata = parseMetadata(input.metadata);
   if (Object.keys(update).length === 0)
     throw new CliError(
       "invalid_input",
-      "変更する項目（--name・--price・--access-url）を指定してください。",
+      "変更する項目（--name・--price・--access-url・--metadata）を指定してください。",
     );
   const current = await call(session, context, () =>
     session.client.products.get(productId),
   );
+  // 種類の取り違えは送る前に止める（API も 400 にする）。
+  if (update.metadata !== undefined && current.access_type !== "feature")
+    throw new CliError(
+      "invalid_input",
+      "--metadata は機能フラグの商品だけで指定できます。",
+    );
   const changes: Record<string, { from: unknown; to: unknown }> = {};
   const messages: string[] = [];
   if (
@@ -769,7 +780,18 @@ export async function updateProduct(
   ) {
     changes.price_jpy = { from: current.price_jpy, to: update.price_jpy };
     messages.push(
-      `価格を ${yen(current.price_jpy)} から ${yen(update.price_jpy)} に変更します。`,
+      current.price_jpy === null
+        ? `価格を ${yen(update.price_jpy)} に設定します。設定すると購入できるようになります。`
+        : `価格を ${yen(current.price_jpy)} から ${yen(update.price_jpy)} に変更します。`,
+    );
+  }
+  if (
+    update.metadata !== undefined &&
+    !sameMetadata(current.metadata ?? {}, update.metadata)
+  ) {
+    changes.metadata = { from: current.metadata ?? {}, to: update.metadata };
+    messages.push(
+      `設定値を ${metadataText(current.metadata)} から ${metadataText(update.metadata)} に置き換えます。既存の購入者全員に、すぐに反映されます。`,
     );
   }
   if (

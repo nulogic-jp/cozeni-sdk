@@ -111,7 +111,8 @@ export interface ProductImage {
 export interface Product {
   id: string;
   name: string;
-  price_jpy: number;
+  // 管理画面で価格を空にして登録した商品は null で、価格を設定するまで購入できない（price_not_set）。
+  price_jpy: number | null;
   currency: "jpy";
   access_type: AccessType;
   access_url: string | null;

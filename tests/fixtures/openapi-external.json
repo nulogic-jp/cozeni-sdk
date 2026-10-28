@@ -524,7 +524,8 @@
             "type": "string"
           },
           "price_jpy": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           },
           "currency": {
             "type": "string",
@@ -1353,7 +1354,7 @@
             }
           },
           "410": {
-            "description": "product_archived（アーカイブ済み・未公開）または checkout_link_disabled（標準リンクが無効）。既存の購入画面と同じ。",
+            "description": "product_archived（アーカイブ済み・未公開）、price_not_set（価格が未設定）、または checkout_link_disabled（標準リンクが無効）。既存の購入画面と同じ。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2654,7 +2655,7 @@
             }
           },
           "409": {
-            "description": "creator_not_ready（売上の受け取り先が未登録・販売者の情報が未承認など。blockers は GET /account の sales.blockers と同じ）/ product_archived / checkout_link_disabled。",
+            "description": "creator_not_ready（売上の受け取り先が未登録・販売者の情報が未承認など。blockers は GET /account の sales.blockers と同じ）/ product_archived / price_not_set（価格が未設定）/ checkout_link_disabled。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2795,7 +2796,7 @@
             }
           },
           "409": {
-            "description": "creator_not_ready（売上の受け取り先が未登録・販売者の情報が未承認など。blockers は GET /account の sales.blockers と同じ）/ product_archived / checkout_link_disabled。",
+            "description": "creator_not_ready（売上の受け取り先が未登録・販売者の情報が未承認など。blockers は GET /account の sales.blockers と同じ）/ product_archived / price_not_set（価格が未設定）/ checkout_link_disabled。",
             "content": {
               "application/json": {
                 "schema": {

@@ -18,7 +18,7 @@ Cozeni外部API v1用のサーバー向けJavaScript / TypeScript SDKと、商�
 サイトのプロジェクトのフォルダで `init` を実行します。**取得に認証は必要ありません。**
 
 ```sh
-npx @nulogic/cozeni-sdk@0.8.0 init --creator <クリエイターID>
+npx @nulogic/cozeni-sdk@0.9.0 init --creator <クリエイターID>
 ```
 
 `--profile` を付けない `init` は、サンドボックスで実装・テスト購入してから本番へ切り替える流れの準備です（下の「サンドボックス」）。サンドボックスを使わず本番に直接つなぐときは `--profile production` を付けます。
@@ -100,7 +100,7 @@ npx cozeni <コマンド> [--json] [--profile <名前>] [--yes]
 | `products list` | 商品一覧 |
 | `products get <商品ID>` | 商品1件と購入リンクの状態（取得だけで、リンクを発行しない） |
 | `products create --name <名前> --price <円> --access-url <URL>` | 商品を作成し、標準の購入リンクを返す。同じ内容の有効な商品があれば作らずにそれを返す（`--allow-duplicate` で作る） |
-| `products update <商品ID> [--name] [--price] [--access-url]` | 商品を変更する |
+| `products update <商品ID> [--name] [--price] [--access-url] [--metadata key=value …]` | 商品を変更する（`--metadata` は機能フラグの商品の設定値で、全置換） |
 | `link <商品ID>` | 標準の購入リンクを取得する（無ければ発行） |
 | `test-purchase --product <商品ID> --site-origin <URL>` | サンドボックス専用。テスト購入して限定ページに入れることを確かめ、返金する（上の「テスト購入」） |
 | `switch` | 本番にログイン済みで期待するクリエイターと一致していれば、既定のプロファイルを `production` にする（上の「本番へ切り替える」） |
@@ -153,7 +153,7 @@ TTYがあり、AIエージェントの実行環境（`CLAUDECODE`・`CURSOR_AGEN
 
 ### 確認が必要な操作
 
-商品の作成、価格の変更、`access_url`（購入後に表示するページ）の変更は、`--yes` が無ければ実行しません。`access_url` の変更は既存の購入者全員にすぐ反映されるためです。TTYでは変更前後を示して確認を求め、TTYが無ければ `confirmation_required` で止まります（確認する内容は `error.details`）。AIは利用者に確認してから `--yes` を付けて実行します。
+商品の作成、価格の変更、`access_url`（購入後に表示するページ）と設定値（`metadata`）の変更は、`--yes` が無ければ実行しません。`access_url` と設定値の変更は既存の購入者全員にすぐ反映されるためです。TTYでは変更前後を示して確認を求め、TTYが無ければ `confirmation_required` で止まります（確認する内容は `error.details`）。AIは利用者に確認してから `--yes` を付けて実行します。
 
 `products create` は、作成の前に商品一覧を見て、名前・価格・`access_url` が同じ有効な商品があれば、作らずにそれを返します（`data.reused: true`、`data.reason: "same_product_exists"`。確認は不要です）。そのとき購入リンクは取得だけで、未発行なら発行せず `data.next_step` に `link` を返します。同じ内容でも別の商品を作るには `--allow-duplicate` を付けます。
 
@@ -202,7 +202,7 @@ const withImage = await client.products.putImage(product.id, image);
 const withoutImage = await client.products.deleteImage(product.id);
 ```
 
-ほかに `account.get`、`products.list` / `get` / `update`、`checkoutLinks.ensure` があります。商品の種類は `access_type`（`'page'` 購入者限定ページ・`'feature'` 機能フラグ）で、作成で省略すると `'page'` です。`'feature'` の商品は `access_url` を持たず、`metadata`（設定値）を持てます。応答の `access_url` は、URLを持たない商品（`feature`・`file`）では `null` です。商品の種類の判定には `access_url` ではなく `access_type` を使います。`access_type` は作成後に変えられず、更新の `metadata` は全置換です（`{}` で全消去、省略で変更なし）。`price_jpy` は円をそのまま渡します。`create` の冪等キーはPOSTより前に保存し、応答を失っても同じ入力・同じキーで再送します（自動リトライはありません）。
+ほかに `account.get`、`products.list` / `get` / `update`、`checkoutLinks.ensure` があります。商品の種類は `access_type`（`'page'` 購入者限定ページ・`'feature'` 機能フラグ）で、作成で省略すると `'page'` です。`'feature'` の商品は `access_url` を持たず、`metadata`（設定値）を持てます。応答の `access_url` は、URLを持たない商品（`feature`・`file`）では `null` です。商品の種類の判定には `access_url` ではなく `access_type` を使います。`access_type` は作成後に変えられず、更新の `metadata` は全置換です（`{}` で全消去、省略で変更なし）。`price_jpy` は円をそのまま渡します。管理画面で価格を空にして登録した商品の応答は `price_jpy: null` で、価格を設定するまで購入できません（購入画面の作成は `price_not_set`）。`create` の冪等キーはPOSTより前に保存し、応答を失っても同じ入力・同じキーで再送します（自動リトライはありません）。
 
 `description` は商品の説明（Markdown）で、`create` / `update` に任意で渡します。前後の空白を除いて4000コードポイントまでで、`null`・空白だけなら説明なしです。商品の `description` は文字列か `null` で、長さはSDKでは検証せずサーバーの判定（`invalid_input`）に任せます。
 
