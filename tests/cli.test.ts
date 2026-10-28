@@ -1250,7 +1250,7 @@ describe("products", () => {
     );
     expect(t.parsed().error.message).toContain("購入者");
   });
-  // 管理画面で価格を空にして登録した機能フラグの商品に、AI エージェントが価格と設定値を入れる（Cozeni 07-decisions.md AG-2）。
+  // 管理画面で価格を空にして登録した機能フラグの商品に、AI エージェントが価格と設定値を入れる（Cozeni 07-decisions.md AH-2）。
   describe("価格と設定値の登録（--metadata）", () => {
     const unpriced = {
       ...fixture.feature_product,
